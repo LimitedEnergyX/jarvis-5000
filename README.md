@@ -12,7 +12,7 @@ your way until something actually needs you.
 ┌─────────────────┬─────────────────┬─────────────────┐
 │ SYSTEM HEALTH   │ SERVICES        │ SECURITY POSTURE│
 ├─────────────────┼─────────────────┼─────────────────┤
-│ HOME SENSORS    │   ★ PUSH ★      │ HOME CLIMATE    │
+│ HOME SENSORS    │   ★ PUSH ★     │ HOME CLIMATE    │
 ├─────────────────┼─────────────────┼─────────────────┤
 │ ENERGY CURRENT  │ ENERGY FINANCE  │ WEATHER         │
 └─────────────────┴─────────────────┴─────────────────┘
