@@ -1,0 +1,33 @@
+# ═══════════════════════════════════════════════════════════════
+#  config.js is gitignored by default
+# ═══════════════════════════════════════════════════════════════
+# config.js holds your InfluxDB token, your host and your entity IDs.
+# It is ignored here on purpose — commit config.example.js instead.
+#
+# This is a default, not a guarantee: `git add -f config.js` will still
+# stage it, and a rule added after the fact does not remove a secret that
+# is already in your history. Check `git status` before you commit.
+config.js
+
+# Kiosk browser profile (created at runtime)
+_kiosk-profile/
+
+# Logs
+*.log
+logs/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Local snapshots / backups
+_restore/
+*.bak
+*.bak[0-9]

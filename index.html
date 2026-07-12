@@ -1,0 +1,2164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis:5000 · AI Command Deck</title>
+<!-- No webfonts. One font everywhere: Courier New mono.
+     (VT323's blocky numerals and Orbitron are gone.) -->
+
+<!--
+═══════════════════════════════════════════════════════════════════
+  JARVIS:5000 - AI COMMAND DECK
+  A component of a self-hosted home platform
+  https://github.com/LimitedEnergyX/jarvis-5000
+═══════════════════════════════════════════════════════════════════
+  QUICK START:
+    cd .
+    node server.js
+    → http://YOUR_HOST:5000   (or http://localhost:5000)
+
+  NOTE: Always open via http://, never by double-clicking this file.
+  Opening as file:// sends "Origin: null" and every panel will fail
+  with "Failed to fetch". That was the original cause of the dead
+  panels — not the APIs.
+
+  REMAINING SETUP (for live data on all panels):
+
+  1. Powerwall — CORS already added to your energy API
+     (zero-dep middleware, allows localhost + 192.168.1.x)
+
+  2. InfluxDB — add to docker-compose.yml influxdb environment:
+       - INFLUXD_HTTP_CORS_ALLOWED_ORIGINS=http://localhost:5000,http://YOUR_HOST:5000
+     ↳ docker compose up -d influxdb
+
+  3. Home Assistant — NO TOKEN NEEDED. HA already streams every
+     sensor into the `homeassistant` InfluxDB bucket, so Home Climate
+     reads from Influx using the token we already have.
+
+  PANELS (7):
+     NODE-01 Jarvis System Health  — CPU/RAM/GPU/disk via /api/system
+     NODE-07 Energy Current        — Powerwall :3002
+     NODE-03 Home Climate          — InfluxDB `homeassistant` bucket
+     NODE-04 System Status         — server + Influx reachability
+     NODE-08 Energy Financials     — Powerwall :3002
+     NODE-06 Sysmon Guardian       — InfluxDB `sysmon` bucket
+     NODE-07 Services Grid         — reachability pings (full width)
+═══════════════════════════════════════════════════════════════════
+-->
+
+<style>
+/* ── RESET ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── DESIGN TOKENS (Powerwall palette + Orbitron/VT323 accents) */
+:root {
+  --bg:          #0a0a0a;
+  --surface:     #111111;
+  --surface-hi:  #161616;
+  --border:      #202020;
+  --border-hi:   #2e2e2e;
+  --amber:       #f5a623;
+  --amber-dim:   #7a5110;
+  --amber-bg:    #140e00;
+  --green:       #2ecc71;
+  --green-dim:   #1a6b3a;
+  --green-bg:    #061410;
+  --red:         #e74c3c;
+  --red-bg:      #140505;
+  --blue:        #3498db;
+  --blue-bg:     #040d18;
+  --purple:      #9b59b6;
+  --text:        #c8c8c8;
+  --muted:       #666;
+  --dim:         #333;
+  /* ONE font. Everything — labels, numbers, percentages, gauges. */
+  --mono:        'Courier New', Courier, monospace;
+  --sans:        'Courier New', Courier, monospace;
+  --display:     'Courier New', Courier, monospace;
+  --gauge:       'Courier New', Courier, monospace;
+}
+
+html, body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+/* ── HEADER ──────────────────────────────────────────────────── */
+.hdr {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: .85rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.hdr-brand .eyebrow {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .22em;
+  color: var(--amber);
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.hdr-brand h1 {
+  font-family: var(--display);
+  font-size: clamp(1rem, 2vw, 1.45rem);
+  font-weight: 900;
+  letter-spacing: .06em;
+  color: var(--text);
+}
+
+.hdr-brand .subtitle {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 3px;
+  letter-spacing: .05em;
+}
+
+.hdr-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.clock-block {
+  text-align: right;
+}
+
+.clock-time {
+  font-family: var(--gauge);
+  font-size: 2rem;
+  color: var(--amber);
+  line-height: 1;
+  letter-spacing: .04em;
+}
+
+.clock-date {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: .08em;
+}
+
+/* online pill — straight from Powerwall dashboard */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-hi);
+  color: var(--muted);
+  white-space: nowrap;
+  transition: all .3s;
+}
+.pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 7px; overflow: hidden; font-size: 0; }
+.pill-txt { white-space: nowrap; }
+.pill.live  { border-color: var(--green-dim); background: var(--green-bg); color: var(--green); }
+.pill.live  .pill-dot { background: var(--green); box-shadow: 0 0 6px var(--green); animation: dpulse 2s infinite; }
+.pill.warn  { border-color: var(--amber-dim); background: var(--amber-bg); color: var(--amber); }
+.pill.warn  .pill-dot { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.pill.dead  { border-color: #3a1212; background: var(--red-bg); color: var(--red); }
+.pill.dead  .pill-dot { background: var(--red); box-shadow: 0 0 4px var(--red); }
+
+@keyframes dpulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+
+/* ── STATUS BAR ──────────────────────────────────────────────── */
+.status-bar {
+  background: #0d0d0d;
+  border-bottom: 1px solid var(--border);
+  padding: .3rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: .08em;
+}
+
+.sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.sdot.live { background: var(--green); box-shadow: 0 0 5px var(--green); animation: dpulse 2s infinite; }
+.sdot.dead { background: var(--red); }
+
+/* ── DASHBOARD GRID ──────────────────────────────────────────── */
+.dash {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: minmax(260px, auto);
+  gap: 10px;
+  padding: 10px;
+  align-items: stretch;
+}
+
+@media (max-width: 1000px) { .dash { grid-template-columns: 1fr 1fr; } }
+@media (max-width:  640px) { .dash { grid-template-columns: 1fr; } }
+
+/* ── PANEL ───────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--amber);
+  border-radius: 6px;
+  padding: 11px 13px 10px;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel.live-panel  { border-top-color: var(--green); }
+.panel.blue-panel  { border-top-color: var(--blue); }
+.panel.dead-panel  { border-top-color: #333; }
+
+/* ── PANEL HEADER ────────────────────────────────────────────── */
+.ph {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 7px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ph-title {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .2em;
+  color: var(--muted);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ph-id {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--dim);
+  letter-spacing: .1em;
+}
+
+/* ── SECTION LABEL (inside panel) ────────────────────────────── */
+.sec {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  color: var(--muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin: 8px 0 6px;
+}
+
+/* ── CARD GRID (2×2 mini cards, like Powerwall) ──────────────── */
+.card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin: 4px 0;
+}
+
+.card {
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 7px 9px;
+}
+
+.card-lbl {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.card-val {
+  font-family: var(--mono);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.card-unit {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.card-sub {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+/* ── BIG GAUGE (VT323 — the Matrix DNA touch) ────────────────── */
+.gauge {
+  font-family: var(--gauge);
+  font-size: 3rem;
+  line-height: 1;
+  text-align: center;
+  margin: 2px 0 0;
+}
+
+.gauge-sub {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: .18em;
+  color: var(--muted);
+  text-align: center;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ── METRIC ROW ──────────────────────────────────────────────── */
+.mrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid #181818;
+}
+.mrow:last-child { border-bottom: none; }
+
+.mlbl {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.mval {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ── PROGRESS BAR (thin, Powerwall style) ────────────────────── */
+.bar-wrap { margin: 5px 0; }
+
+.bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.bar-track {
+  height: 4px;
+  background: #1a1a1a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width .8s ease;
+  background: var(--amber);
+}
+
+.bar-fill.green  { background: var(--green); }
+.bar-fill.blue   { background: var(--blue); }
+.bar-fill.red    { background: var(--red); }
+.bar-fill.warn   { background: var(--amber); }
+
+/* ── TAGS / BADGES ───────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .08em;
+  padding: 2px 7px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.badge.amber  { border-color: var(--amber-dim); color: var(--amber); background: var(--amber-bg); }
+.badge.green  { border-color: var(--green-dim); color: var(--green); background: var(--green-bg); }
+.badge.blue   { border-color: #1a3d5e; color: var(--blue); background: var(--blue-bg); }
+.badge.red    { border-color: #5e1a1a; color: var(--red); background: var(--red-bg); }
+
+/* ── PLACEHOLDER ─────────────────────────────────────────────── */
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 2;
+  padding: 8px;
+}
+
+.placeholder .ph-title-txt {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .15em;
+  text-transform: uppercase;
+}
+
+.placeholder code {
+  display: block;
+  background: var(--surface-hi);
+  border-left: 2px solid var(--amber-dim);
+  color: #888;
+  padding: 3px 8px;
+  margin: 3px auto;
+  text-align: left;
+  font-size: 9px;
+  max-width: 280px;
+  width: 100%;
+}
+
+/* ── SERVICES GRID ───────────────────────────────────────────── */
+.svc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.svc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* ── MODEL TAGS ──────────────────────────────────────────────── */
+.model-list {
+  max-height: 68px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.model-chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 8px;
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: var(--muted);
+  margin: 1px 1px 1px 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-chip.loaded {
+  border-color: var(--green-dim);
+  color: var(--green);
+  background: var(--green-bg);
+}
+
+/* ── FIN TABLE ───────────────────────────────────────────────── */
+.fin-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+  font-family: var(--mono);
+  font-size: 9px;
+  border-bottom: 1px solid #181818;
+}
+.fin-row:last-child { border-bottom: none; }
+.fin-lbl { color: var(--muted); }
+.fin-val { font-weight: 700; font-size: 11px; }
+
+/* ── FOOTER ──────────────────────────────────────────────────── */
+.footer {
+  border-top: 1px solid var(--border);
+  padding: .6rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: .08em;
+}
+
+/* ── UTILITIES ───────────────────────────────────────────────── */
+.amber  { color: var(--amber) !important; }
+.green  { color: var(--green) !important; }
+.red    { color: var(--red)   !important; }
+.blue   { color: var(--blue)  !important; }
+.muted  { color: var(--muted) !important; }
+.upd    { font-family: var(--mono); font-size: 8px; color: var(--dim); text-align: right; margin-top: auto; padding-top: 6px; }
+.fill   { flex: 1; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 6px 0; }
+
+/* ═══════════════════════════════════════════════════════════════
+   v2.2 — LEGIBILITY PASS
+   Bigger type + centered panel headings. Kept as one override block
+   so the whole pass can be tuned or reverted in one place.
+   ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   v3.1 — STATIC-DISPLAY DENSITY PASS
+   Every tile must fit its cell. No scrolling anywhere: this hangs
+   on a wall, nobody can scroll it. Tight, centered, no dead space.
+   ═══════════════════════════════════════════════════════════════ */
+/* ── FLUID ROOT ────────────────────────────────────────────────
+   The grid is exactly 3 rows of 100vh, so tile height scales with
+   viewport height. Tie the root font-size to vh and express every
+   size below in rem, and the entire deck scales as one unit:
+   1080p, 1440p, 4K — same proportions, no scrolling, no retuning.
+
+     812px window → 16.2px   (what everything was tuned against)
+     1080p        → 21.6px
+     1440p        → 28.8px
+     4K (2160p)   → 43.2px
+   ────────────────────────────────────────────────────────────── */
+html, body { font-size: clamp(11px, 2vh, 46px); }
+
+/* Panel heading — one tight line. Title centered, NODE-id pinned right. */
+.ph          { position: relative; justify-content: center; padding-bottom: .28rem; margin-bottom: .34rem; }
+.ph-id       { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: .66rem; }
+.ph .pill    { font-size: .88rem !important; padding: .19rem .75rem !important; border-radius: .75rem !important; letter-spacing: .12em; }
+.ph .pill-dot{ width: .5rem; height: .5rem; flex-basis: .5rem; }
+
+.sec { font-size: .72rem; text-align: center; letter-spacing: .16em; padding-bottom: .13rem; margin: .25rem 0 .19rem; }
+
+/* Cards — centered */
+.card      { padding: .31rem .31rem; text-align: center; }
+.card-lbl  { font-size: .72rem; letter-spacing: .06em; margin-bottom: .06rem; white-space: nowrap; }
+.card-val  { font-size: 1.45rem; font-weight: 700; line-height: 1.1; }
+.card-unit { font-size: .75rem; }
+.card-sub  { font-size: .69rem; margin-top: .06rem; white-space: nowrap; }
+.card-grid { gap: .31rem; margin: .19rem 0; }
+
+/* 4-across mini grid (System Health, Energy, Financials) */
+.quad { display: grid; grid-template-columns: repeat(4, 1fr); gap: .31rem; margin: .19rem 0; }
+
+/* 3-across inline strip */
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .31rem;
+  text-align: center;
+  margin-top: .25rem;
+}
+/* NOT scoped to .trio — the Weather tile's outdoor-AQI block reuses these
+   outside a .trio, and scoping them silently made it render a size smaller. */
+.t-lbl { font-size: .72rem; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.t-val { font-size: 1.25rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+
+/* Gauges */
+.gauge     { font-size: 2.6rem; font-weight: 700; margin: 0; line-height: 1.05; }
+.gauge-sub { font-size: .72rem; letter-spacing: .14em; margin-bottom: .25rem; white-space: nowrap; }
+
+/* Metric rows */
+.mrow { padding: .16rem 0; }
+.mlbl { font-size: .78rem; }
+.mval { font-size: .84rem; }
+
+/* Bars */
+.bar-wrap   { margin: .22rem 0; }
+.bar-labels { font-size: .72rem; margin-bottom: .13rem; }
+.bar-track  { height: .22rem; border-radius: .13rem; }
+.bar-fill   { border-radius: .13rem; }
+
+.badge      { font-size: .72rem; padding: .13rem .5rem; border-radius: .19rem; }
+.svc-row    { font-size: .78rem; padding: .22rem .44rem; gap: .44rem; border-radius: .25rem; }
+.fin-row    { font-size: .81rem; padding: .19rem 0; }
+.fin-val    { font-size: .88rem; }
+.divider    { margin: .38rem 0; }
+
+.placeholder               { font-size: .81rem; line-height: 1.6; }
+.placeholder .ph-title-txt { font-size: .94rem; }
+.placeholder code          { font-size: .75rem; padding: .31rem .56rem; max-width: 20rem; }
+
+.setup-note { font-size: .75rem; padding: .31rem .44rem; line-height: 1.4; margin-top: .31rem; text-align: center; border-radius: .25rem; }
+.pill       { font-size: .81rem; }
+.upd        { font-size: .69rem; padding-top: .25rem; }
+.sdot       { width: .38rem; height: .38rem; }
+
+/* ═══════════════════════════════════════════════════════════════
+   v3.0 — HEADERLESS 3×3 COMMAND GRID
+   No header, no status bar, no footer. The grid IS the page.
+   Center cell (row 2, col 2) is the push/alert tile.
+   ═══════════════════════════════════════════════════════════════ */
+html, body { height: 100%; overflow: hidden; }
+
+.dash {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows:    repeat(3, 1fr);
+  grid-auto-rows: unset;
+  gap: .5rem;
+  padding: .5rem;
+  height: 100vh;
+  align-items: stretch;
+}
+
+.panel {
+  padding: .56rem .75rem .38rem;
+  min-height: 0;          /* let the grid drive height, not content */
+  overflow: hidden;
+  border-radius: .38rem;
+}
+
+/* STATIC DISPLAY: no scrollbars, anywhere. Content is sized to fit.
+   Tiles are laid out to fill the cell, so nothing is clipped either. */
+.panel .fill {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;   /* kill dead space — content centers vertically */
+}
+
+/* ── CENTER PUSH TILE ─────────────────────────────────────────── */
+.push {
+  border-top-color: #222;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color .4s, background .4s;
+  position: relative;      /* anchors .push-id */
+}
+
+.push-body {
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .13rem;
+}
+
+/* Quiet state — the clock the header used to hold */
+/* Brightened ~50%: the date and status line were unreadable on the wall.
+   #3a3a3a → #575757 · #2e2e2e → #454545 · #262626 → #393939 */
+.push-clock {
+  font-family: var(--gauge);
+  /* The root font is sized off viewport HEIGHT (2vh), but the clock is
+     constrained by tile WIDTH — one third of the screen. On a squarer
+     display (e.g. 3:2) 5.2rem overflowed and clipped "11:59:19".
+     Cap it against viewport width so it can never outgrow its tile:
+     8 chars x ~0.6em in Courier => needs ~4.8em, and the tile is ~33vw,
+     so 6vw is the safe ceiling. */
+  font-size: min(5.2rem, 6vw);
+  line-height: 1;
+  color: #575757;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.push-date  { font-family: var(--mono); font-size: .75rem; letter-spacing: .22em; color: #454545; }
+.push-quiet { font-family: var(--mono); font-size: .69rem; letter-spacing: .2em; color: #393939; margin-top: .88rem; }
+
+/* The push tile has no .ph header, so its NODE id is pinned directly. */
+.push-id {
+  position: absolute;
+  top: .56rem;
+  right: .75rem;
+  font-family: var(--mono);
+  font-size: .66rem;
+  letter-spacing: .1em;
+  color: var(--dim);
+  z-index: 3;
+}
+
+/* Loud state */
+.push-icon   { font-size: 4rem; line-height: 1; margin-bottom: .5rem; }
+.push-title  { font-family: var(--display); font-size: 2.1rem; font-weight: 700; letter-spacing: .05em; }
+.push-detail { font-family: var(--mono); font-size: 1.06rem; color: var(--text); margin-top: .38rem; letter-spacing: .08em; }
+.push-time   { font-family: var(--mono); font-size: .81rem; color: var(--muted); margin-top: .5rem; }
+
+/* ── Camera snapshot behind the alert text ────────────────────── */
+.push-photo { padding: 0; position: relative; overflow: hidden; }
+.push-photo .push-body { width: 100%; height: 100%; position: relative; gap: 0; }
+
+.push-cam {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+/* Scrim keeps the overlaid text readable over any frame */
+.push-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(to bottom,
+              rgba(0,0,0,.55) 0%,
+              rgba(0,0,0,.15) 35%,
+              rgba(0,0,0,.80) 100%);
+}
+
+.push-fg {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  text-align: center;
+  margin-top: auto;
+  padding: 0 .75rem .88rem;
+}
+.push-photo .push-title  { text-shadow: 0 2px 12px #000, 0 0 4px #000; }
+.push-photo .push-detail { text-shadow: 0 2px 10px #000; color: #ddd; }
+.push-photo .push-count  { text-shadow: 0 2px 10px #000; margin-top: .5rem; }
+
+/* Everything below scales with the root font. Any leftover px here
+   would break at 4K, so keep this block rem-only. */
+.svc-grid { gap: .25rem; margin: .25rem 0; }
+
+/* Rotation indicator — shown only when 2+ alerts are cycling */
+.push-count {
+  font-family: var(--mono);
+  font-size: .69rem;
+  letter-spacing: .2em;
+  color: var(--muted);
+  margin-top: .75rem;
+}
+.push-dots { display: flex; gap: .38rem; justify-content: center; margin-top: .38rem; }
+.pdot {
+  width: .44rem; height: .44rem; border-radius: 50%;
+  background: #333;
+  transition: transform .25s, background .25s;
+}
+.pdot.on { transform: scale(1.5); }
+.pdot-critical.on { background: var(--red); }
+.pdot-warn.on     { background: var(--amber); }
+.pdot-info.on     { background: var(--blue); }
+.pdot-clock.on    { background: var(--muted); }   /* the "resting" slot */
+
+/* Dots on the clock slot sit under the quiet text */
+.push-quiet + .push-dots { margin-top: 10px; }
+
+.push-critical { border-top-color: var(--red) !important; background: var(--red-bg); animation: pushPulse 1.4s infinite; }
+.push-critical .push-title { color: var(--red); }
+.push-warn     { border-top-color: var(--amber) !important; background: var(--amber-bg); }
+.push-warn     .push-title { color: var(--amber); }
+.push-info     { border-top-color: var(--blue) !important; background: var(--blue-bg); }
+.push-info     .push-title { color: var(--blue); }
+
+.push-critical-txt { color: var(--red); }
+.push-warn-txt     { color: var(--amber); }
+.push-info-txt     { color: var(--blue); }
+
+@keyframes pushPulse {
+  0%, 100% { background: var(--red-bg); }
+  50%      { background: #1f0808; }
+}
+
+/* Services tile: 8 services in 2 cols fits the taller cell */
+#panel-svc .svc-grid { grid-template-columns: 1fr 1fr; }
+
+/* System Health carries three stacked bars — tighten its bars
+   specifically rather than shrinking bars everywhere. */
+#panel-health .bar-wrap   { margin: .13rem 0; }
+#panel-health .bar-labels { margin-bottom: .13rem; }
+
+/* Weather is the densest tile (icon + gauge + trio + 4-hour strip).
+   It was the last one clipping at 720p — trim just this tile. */
+#panel-wx            { position: relative; }
+#panel-wx .gauge     { font-size: 2.1rem; }
+#panel-wx .gauge-sub { margin-bottom: 0; }
+#panel-wx .trio      { margin-top: .19rem; }
+
+/* Outdoor AQI now lives INSIDE the top trio, in the same slot the indoor
+   AQI occupies on the Climate tile — no absolute positioning needed. */
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     3×3 COMMAND GRID — no header, no chrome.
+     Center tile is the PUSH tile: dimmed clock when quiet,
+     takes over the moment something needs attention.
+     Bottom row is all Powerwall (:3002), grouped.
+     ═══════════════════════════════════════════════════════════ -->
+<div class="dash">
+
+  <!-- ROW 1 -->
+  <div class="panel" id="panel-health">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-health"><span class="pill-dot"></span><span class="pill-txt">JARVIS SYSTEM HEALTH</span></span></div>
+      <span class="ph-id">NODE-01</span>
+    </div>
+    <div id="c-health" class="fill"><div class="placeholder"><div class="ph-title-txt">Reading system…</div></div></div>
+    <div class="upd" id="u-health"></div>
+  </div>
+  <div class="panel" id="panel-svc">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-svc"><span class="pill-dot"></span><span class="pill-txt">SERVICES &amp; STATUS</span></span></div>
+      <span class="ph-id">NODE-02</span>
+    </div>
+    <div id="c-svc" class="fill"><div class="placeholder"><div class="ph-title-txt">Pinging services…</div></div></div>
+    <div class="upd" id="u-svc"></div>
+  </div>
+  <div class="panel" id="panel-sec">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-sec"><span class="pill-dot"></span><span class="pill-txt">SYSMON GUARDIAN</span></span></div>
+      <span class="ph-id">NODE-03</span>
+    </div>
+    <div id="c-sec" class="fill"><div class="placeholder"><div class="ph-title-txt">Querying InfluxDB…</div></div></div>
+    <div class="upd" id="u-sec"></div>
+  </div>
+  <!-- ROW 2 · center is the push tile -->
+  <div class="panel" id="panel-home">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-home"><span class="pill-dot"></span><span class="pill-txt">HOME SENSORS</span></span></div>
+      <span class="ph-id">NODE-04</span>
+    </div>
+    <div id="c-home" class="fill"><div class="placeholder"><div class="ph-title-txt">Querying sensors…</div></div></div>
+    <div class="upd" id="u-home"></div>
+  </div>
+  <div class="panel push" id="panel-push">
+    <span class="push-id">NODE-05</span>
+    <div id="c-push" class="push-body">
+      <div class="push-clock" id="push-clock">--:--:--</div>
+      <div class="push-date"  id="push-date">---</div>
+    </div>
+  </div>
+  <div class="panel" id="panel-climate">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-climate"><span class="pill-dot"></span><span class="pill-txt">HOME CLIMATE</span></span></div>
+      <span class="ph-id">NODE-06</span>
+    </div>
+    <div id="c-climate" class="fill"><div class="placeholder"><div class="ph-title-txt">Querying InfluxDB…</div></div></div>
+    <div class="upd" id="u-climate"></div>
+  </div>
+  <!-- ROW 3 · all Powerwall (:3002) -->
+  <div class="panel" id="panel-pw">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-pw"><span class="pill-dot"></span><span class="pill-txt">ENERGY CURRENT</span></span></div>
+      <span class="ph-id">NODE-07</span>
+    </div>
+    <div id="c-pw" class="fill"><div class="placeholder"><div class="ph-title-txt">Contacting Powerwall…</div></div></div>
+    <div class="upd" id="u-pw"></div>
+  </div>
+  <div class="panel" id="panel-fin">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-fin"><span class="pill-dot"></span><span class="pill-txt">ENERGY FINANCIALS</span></span></div>
+      <span class="ph-id">NODE-08</span>
+    </div>
+    <div id="c-fin" class="fill"><div class="placeholder"><div class="ph-title-txt">Contacting Powerwall…</div></div></div>
+    <div class="upd" id="u-fin"></div>
+  </div>
+  <div class="panel" id="panel-wx">
+    <div class="ph">
+      <div class="ph-title"><span class="pill" id="d-wx"><span class="pill-dot"></span><span class="pill-txt">WEATHER</span></span></div>
+      <span class="ph-id">NODE-09</span>
+    </div>
+    <div id="c-wx" class="fill"><div class="placeholder"><div class="ph-title-txt">Contacting Powerwall…</div></div></div>
+    <div class="upd" id="u-wx"></div>
+  </div>
+</div><!-- /.dash -->
+
+<!-- Your settings. Copy config.example.js -> config.js (gitignored).
+     Missing on purpose in a fresh clone; ?demo=1 works without it. -->
+<script src="config.js" onerror="window.__NO_CONFIG=1"></script>
+<script src="demo.js"></script>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  CONFIG
+//  Nothing site-specific lives in this file. It all comes from
+//  config.js (copy config.example.js). See README.
+// ═══════════════════════════════════════════════════════════════
+const DEMO = new URLSearchParams(location.search).has('demo');
+
+// Screenshot mode: ?demo=1&freeze=12:22:22
+// Freezes the deck on a deterministic frame — clock showing, no alert, all
+// timestamps pinned — so the README hero image can be regenerated with one
+// command instead of being a one-off artifact nobody can rebuild.
+//
+// This is the only value on the deck that comes straight from the URL, which
+// makes it the only plausible injection point. It is whitelisted to a literal
+// 24-hour clock and rendered with textContent — never innerHTML. Anything else
+// is discarded and the deck behaves as if ?freeze was never passed.
+const FREEZE = (() => {
+  const raw = new URLSearchParams(location.search).get('freeze');
+  return raw && /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(raw) ? raw : null;
+})();
+
+if (!window.JARVIS_CONFIG && !DEMO) {
+  document.body.innerHTML =
+    '<div style="font:16px monospace;color:#e74c3c;padding:3rem;line-height:1.8">' +
+    '<b>config.js not found.</b><br><br>' +
+    'cp config.example.js config.js &nbsp;&nbsp;then fill it in.<br><br>' +
+    'Or just look at it with no backend at all:<br>' +
+    '<a style="color:#f5a623" href="?demo=1">?demo=1</a></div>';
+  throw new Error('config.js missing');
+}
+
+const CONF = window.JARVIS_CONFIG || DEMO_CONFIG;
+
+// Derive the host from the page URL. Hardcoding `localhost` means the deck
+// only works when opened AS localhost — from another machine or a phone,
+// `localhost` is the VIEWING device, not the server.
+const HOST  = CONF.host || location.hostname || 'localhost';
+const PORTS = Object.assign(
+  { influx: 8086, homeassistant: 8123, energy: 3002 },
+  CONF.ports || {}
+);
+
+const CFG = {
+  PW:          `http://${HOST}:${PORTS.energy}`,
+  // Home Assistant — camera snapshots ONLY. No HA token required:
+  // /api/camera_proxy accepts the per-camera access_token, and that token is
+  // already published into InfluxDB by HA. <img> loads bypass CORS.
+  HA:          `http://${HOST}:${PORTS.homeassistant}`,
+  INFLUX:      `http://${HOST}:${PORTS.influx}`,
+  INFLUX_TOK:  (CONF.influx || {}).token || '',
+  INFLUX_ORG:  (CONF.influx || {}).org   || '',
+  POLL_MS:     CONF.pollMs || 10000,
+};
+
+const BUCKETS = Object.assign(
+  { homeassistant: 'homeassistant', sysmon: 'sysmon' },
+  (CONF.influx || {}).buckets || {}
+);
+
+const E    = CONF.entities || {};
+const PAT  = E.patterns || {};
+const ALRT = Object.assign(
+  { motionWindowMs: 120000, dingWindowMs: 120000, awayMode: false },
+  CONF.alerts || {}
+);
+const SYSMON = Object.assign(
+  { enabled: true, remediationMeasurement: 'remediation', triageMeasurement: 'ai_triage' },
+  CONF.sysmon || {}
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  SERVICES  (reachability pings on NODE-02)
+// ═══════════════════════════════════════════════════════════════
+const SVCS = (CONF.services || []).map(s => ({
+  n: s.name,
+  u: `http://${HOST}:${s.port}${s.path || ''}`,
+}));
+
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+let pollN = 0;
+
+const $ = id => document.getElementById(id);
+const ts = () => new Date().toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+const pct = (u,t) => t > 0 ? clamp(u/t*100, 0, 100) : 0;
+const fmt2 = v => typeof v === 'number' ? v.toFixed(2) : '—';
+const fmtD = v => '$' + Math.abs(+v || 0).toFixed(2);
+
+function setPill(id, state, label) {
+  const el = $(id);
+  if (!el) return;
+  el.className = `pill ${state}`;
+  const dot = el.querySelector('.pill-dot');
+  if (dot) dot.style.background = state === 'live' ? 'var(--green)' : state === 'warn' ? 'var(--amber)' : state === 'blue' ? 'var(--blue)' : 'var(--muted)';
+  // label lives in .pill-txt — never the dot (writing into the 7px dot caused overlapping titles)
+  let txt = el.querySelector('.pill-txt');
+  if (!txt) {
+    txt = document.createElement('span');
+    txt.className = 'pill-txt';
+    // migrate any bare text node in the pill into the label span
+    el.childNodes.forEach(n => { if (n.nodeType === 3) { txt.textContent += n.textContent; n.textContent = ''; } });
+    el.appendChild(txt);
+  }
+  if (label) txt.textContent = label;
+  else if (!txt.textContent.trim()) txt.textContent = id.replace('d-','').toUpperCase();
+}
+
+function setContent(id, html) { const el=$(id); if(el) el.innerHTML = html; }
+function setUpd(id) { const el=$(id); if(el) el.textContent = `Updated ${ts()}`; }
+
+async function GET(url, opts = {}, ms = 5000) {
+  if (DEMO) return window.__DEMO_GET(url);      // ?demo=1 — mock, no network
+  const ac = new AbortController();
+  const tid = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ac.signal });
+    clearTimeout(tid);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r;
+  } catch(e) { clearTimeout(tid); throw e; }
+}
+
+async function INFLUX(flux) {
+  if (DEMO) return window.__DEMO_INFLUX(flux);  // ?demo=1 — mock, no network
+  const r = await GET(
+    `${CFG.INFLUX}/api/v2/query?org=${encodeURIComponent(CFG.INFLUX_ORG)}`,
+    { method:'POST', headers:{
+      'Authorization': `Token ${CFG.INFLUX_TOK}`,
+      'Content-Type': 'application/vnd.flux',
+      'Accept': 'application/csv',
+    }, body: flux }
+  );
+  return r.text();
+}
+
+function parseCSV(csv) {
+  const lines = csv.split('\n').filter(l => l && !l.startsWith('#') && l.trim());
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(l => {
+    const cols = l.split(',');
+    const obj = {};
+    headers.forEach((h, i) => { if(h) obj[h] = (cols[i]||'').trim(); });
+    return obj;
+  }).filter(r => r._value !== undefined);
+}
+
+function barHTML(pct, cls = 'warn') {
+  return `<div class="bar-track"><div class="bar-fill ${cls}" style="width:${clamp(+pct||0,0,100).toFixed(1)}%"></div></div>`;
+}
+
+function bar(lbl, pct, right, cls='warn') {
+  return `<div class="bar-wrap">
+    <div class="bar-labels"><span>${lbl}</span><span>${right !== undefined ? right : pct.toFixed(0)+'%'}</span></div>
+    ${barHTML(pct, cls)}
+  </div>`;
+}
+
+function mrow(lbl, val, cls='') {
+  return `<div class="mrow"><span class="mlbl">${lbl}</span><span class="mval ${cls}">${val}</span></div>`;
+}
+
+function card(lbl, val, unit='', sub='', cls='') {
+  return `<div class="card"><div class="card-lbl">${lbl}</div>
+    <div><span class="card-val ${cls}">${val}</span><span class="card-unit">${unit}</span></div>
+    ${sub ? `<div class="card-sub">${sub}</div>` : ''}
+  </div>`;
+}
+
+function errBox(msg) {
+  return `<div class="placeholder"><div class="ph-title-txt">Unavailable</div>
+    <div style="color:var(--dim);font-size:9px;margin-top:6px">${msg}</div></div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 1 — JARVIS SYSTEM HEALTH  (CPU · RAM · GPU · Disk)
+//  Fed by /api/system on THIS server. The browser can't read
+//  hardware, so node does it: os module + nvidia-smi.
+//  Same origin → no CORS, no Python, no flask, no gputil.
+// ═══════════════════════════════════════════════════════════════
+function upTime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+async function updateSystemHealth() {
+  try {
+    const r = await GET('/api/system');
+    const d = await r.json();
+
+    const cpuCls = d.cpu.pct >= 90 ? 'red' : d.cpu.pct >= 70 ? 'amber' : 'green';
+    const memCls = d.mem.pct >= 90 ? 'red' : d.mem.pct >= 75 ? 'amber' : 'green';
+    const barOf  = c => c === 'green' ? 'green' : c === 'amber' ? 'warn' : 'red';
+
+    const g        = d.gpu;
+    const gUtilCls = g ? (g.util >= 90 ? 'red' : g.util >= 70 ? 'amber' : 'green') : 'muted';
+    const gTempCls = g ? (g.temp >= 83 ? 'red' : g.temp >= 72 ? 'amber' : 'green') : 'muted';
+    const gMemPct  = g ? (g.memUsed / g.memTotal) * 100 : 0;
+
+    setPill('d-health', 'live', 'JARVIS SYSTEM HEALTH');
+    $('panel-health').className = 'panel live-panel';
+
+    const dCls = p => p >= 90 ? 'red' : p >= 75 ? 'amber' : 'green';
+
+    setContent('c-health', `
+      <div class="quad">
+        <div class="card">
+          <div class="card-lbl">CPU</div>
+          <div class="card-val ${cpuCls}">${d.cpu.pct.toFixed(0)}<span class="card-unit">%</span></div>
+          <div class="card-sub">${d.cpu.cores} threads</div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">Memory</div>
+          <div class="card-val ${memCls}">${d.mem.pct.toFixed(0)}<span class="card-unit">%</span></div>
+          <div class="card-sub">${d.mem.usedGB.toFixed(0)}/${d.mem.totalGB.toFixed(0)} GB</div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">GPU</div>
+          <div class="card-val ${gUtilCls}">${g ? g.util : '—'}<span class="card-unit">%</span></div>
+          <div class="card-sub">${g ? g.name.replace('NVIDIA GeForce ', '') : 'none'}</div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">GPU Temp</div>
+          <div class="card-val ${gTempCls}">${g ? g.temp : '—'}<span class="card-unit">°C</span></div>
+          <div class="card-sub">${g ? (g.memUsed / 1024).toFixed(1) + '/' + (g.memTotal / 1024).toFixed(0) + ' GB' : ''}</div>
+        </div>
+      </div>
+      ${bar('CPU', d.cpu.pct, d.cpu.pct.toFixed(0) + '%', barOf(cpuCls))}
+      ${bar('RAM', d.mem.pct, d.mem.pct.toFixed(0) + '%', barOf(memCls))}
+      ${g ? bar('VRAM', gMemPct, gMemPct.toFixed(0) + '%', gMemPct >= 90 ? 'red' : gMemPct >= 70 ? 'warn' : 'green') : ''}
+      <div class="trio">
+        ${d.disks.map(k => `
+          <div>
+            <div class="t-lbl">Disk ${k.drive}</div>
+            <div class="t-val ${dCls(k.usedPct)}">${k.freeGB.toFixed(0)}<span class="card-unit"> GB free</span></div>
+          </div>`).join('')}
+        <div>
+          <div class="t-lbl">Uptime</div>
+          <div class="t-val muted">${upTime(d.uptime)}</div>
+        </div>
+      </div>
+    `);
+  } catch (e) {
+    setPill('d-health', 'dead', 'JARVIS SYSTEM HEALTH');
+    $('panel-health').className = 'panel dead-panel';
+    setContent('c-health', errBox(`/api/system: ${e.message.slice(0, 60)}`));
+  }
+  setUpd('u-health');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 3 — POWERWALL
+// ═══════════════════════════════════════════════════════════════
+async function updatePowerwall() {
+  try {
+    const d = await GET(`${CFG.PW}/api/powerwall`).then(r => r.json());
+    lastPW = d;   // alert engine reads grid_up / island / battery from this
+    const solar   = d.solar   ?? 0;
+    const home    = d.home    ?? 0;
+    const grid    = d.grid    ?? 0;
+    const battPct = d.battery ?? 0;
+    const reserve = d.reserve ?? 20;
+    const gridUp  = d.grid_up ?? true;
+    const charging= d.charging ?? false;
+    const mode    = (d.mode ?? 'N/A').replace('_', ' ');
+    const island  = (d.island ?? (gridUp ? 'on_grid' : 'island')).replace('_', ' ');
+
+    const battCls = battPct < 20 ? 'red' : battPct < 35 ? 'warn' : 'green';
+    const barCls  = battPct < 20 ? 'red' : battPct < 35 ? 'warn' : 'green';
+    const gridTxt = grid > .05 ? `${Math.abs(grid).toFixed(2)} kW import` : grid < -.05 ? `${Math.abs(grid).toFixed(2)} kW export` : 'balanced';
+
+    setPill('d-pw', 'live', 'ENERGY CURRENT');
+    setContent('c-pw', `
+      <div class="quad">
+        ${card('Solar', solar.toFixed(2), 'kW', solar > .1 ? 'Generating' : 'Idle', 'amber')}
+        ${card('Home', home.toFixed(2), 'kW', 'Consuming', '')}
+        ${card('Battery', battPct.toFixed(0), '%', charging ? 'Charging' : 'Discharging', battCls)}
+        ${card('Grid', Math.abs(grid).toFixed(2), 'kW', gridTxt, gridUp ? (grid < 0 ? 'green' : grid > 0 ? 'amber' : '') : 'red')}
+      </div>
+      <div class="bar-wrap">
+        <div class="bar-labels">
+          <span>Battery Charge</span>
+          <span class="${battCls}">${battPct.toFixed(1)}% · reserve ${reserve}%</span>
+        </div>
+        ${barHTML(battPct, barCls)}
+      </div>
+      <div style="margin-top:.31rem;display:flex;gap:.31rem;justify-content:center">
+        <span class="badge amber">${mode.toUpperCase()}</span>
+        <span class="badge ${gridUp ? 'green' : 'red'}">${island.toUpperCase()}</span>
+        ${d.storm ? '<span class="badge amber">STORM WATCH</span>' : ''}
+      </div>
+    `);
+  } catch(e) {
+    setPill('d-pw', 'dead', 'ENERGY CURRENT');
+    setContent('c-pw', errBox(`Powerwall API: ${e.message.slice(0,50)}<br>Add cors() to server.js`));
+  }
+  setUpd('u-pw');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 3 — HOME CLIMATE  (via InfluxDB, NOT the HA API)
+//  Home Assistant already streams every sensor into the
+//  `homeassistant` bucket. So no HA long-lived token is needed —
+//  we reuse the Influx token we already have.
+// ═══════════════════════════════════════════════════════════════
+const C2F = c => (c * 9 / 5) + 32;
+
+// ── Air quality ────────────────────────────────────────────────
+// Indoor monitors and outdoor sensors frequently use OPPOSITE scales:
+//   'score' — 0-100 quality score, HIGHER is better (typical indoor AQM)
+//   'epa'   — EPA AQI,            LOWER  is better (typical outdoor)
+// Same word, opposite meaning. Colouring both the same way would be a lie,
+// so the scale is declared per-sensor in config and honoured here.
+const AQI_IN  = E.aqiIndoor  || { entity: '', scale: 'score' };
+const AQI_OUT = E.aqiOutdoor || { entity: '', scale: 'epa' };
+
+function aqiClass(v, scale) {
+  if (v == null || isNaN(v)) return 'muted';
+  return scale === 'epa'
+    ? (v <= 50 ? 'green' : v <= 100 ? 'amber' : 'red')    // lower = better
+    : (v >= 95 ? 'green' : v >= 75  ? 'amber' : 'red');   // higher = better
+}
+function aqiLabelFor(v, scale) {
+  if (v == null || isNaN(v)) return '—';
+  return scale === 'epa'
+    ? (v <= 50 ? 'good' : v <= 100 ? 'moderate' : v <= 150 ? 'unhealthy (sens.)' : 'unhealthy')
+    : (v >= 95 ? 'excellent' : v >= 75 ? 'moderate' : 'poor');
+}
+
+async function updateClimate() {
+  try {
+    // -6h, not -1h: some room sensors (e.g. the office) only report every
+    // ~90 min, and a 1h window silently dropped them off the panel.
+    const [csvC, csvF, csvP, csvSet, csvMode, csvAQI] = await Promise.all([
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => r._measurement == "°C" and r._field == "value")
+  |> last()
+  |> keep(columns: ["entity_id", "_value"])`),
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => r._measurement == "°F" and r._field == "value")
+  |> last()
+  |> keep(columns: ["entity_id", "_value"])`),
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => (r._measurement == "%" or r._measurement == "W") and r._field == "value")
+  |> last()
+  |> keep(columns: ["entity_id", "_value"])`),
+      // Thermostat target temp (climate entity, numeric field)
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => r._measurement == "${E.thermostat}" and r._field == "temperature")
+  |> last()
+  |> keep(columns: ["_value"])`),
+      // ...and what it's actually doing right now (string field — separate
+      // query, or Influx throws a schema collision mixing float + string)
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => r._measurement == "${E.thermostat}" and r._field == "hvac_action_str")
+  |> last()
+  |> keep(columns: ["_value"])`),
+      // Air quality — indoor + outdoor.
+      INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => (r._measurement == "${AQI_IN.entity}" or r._measurement == "${AQI_OUT.entity}")
+                    and r._field == "value")
+  |> last()
+  |> keep(columns: ["_measurement", "_value"])`),
+    ]);
+
+    const C = {}, F = {}, P = {}, A = {};
+    parseCSV(csvC).forEach(r => C[r.entity_id] = parseFloat(r._value));
+    parseCSV(csvF).forEach(r => F[r.entity_id] = parseFloat(r._value));
+    parseCSV(csvP).forEach(r => P[r.entity_id] = parseFloat(r._value));
+    parseCSV(csvAQI).forEach(r => A[r._measurement] = parseFloat(r._value));
+
+    const setRows  = parseCSV(csvSet);
+    const modeRows = parseCSV(csvMode);
+    const setPt    = setRows.length  ? parseFloat(setRows[0]._value) : null;
+    const hvacAct  = modeRows.length ? String(modeRows[0]._value)    : null;
+
+    const aqiIn  = A[AQI_IN.entity]  ?? null;
+    const aqiOut = A[AQI_OUT.entity] ?? null;
+
+    const indoorF  = C[E.indoorTempC]  != null ? C2F(C[E.indoorTempC])  : null;
+    const outdoorF = C[E.outdoorTempC] != null ? C2F(C[E.outdoorTempC]) : null;
+    const humid    = P[E.indoorHumidity] ?? null;
+    const hvacW    = (E.hvacPower || []).reduce((sum, id) => sum + (P[id] || 0), 0);
+    const running  = hvacW > 100;
+
+    // Rooms come from config.entities.zones
+    const zones = (E.zones || [])
+      .map(z => [z.name, F[z.tempF], P[z.humidity]])
+      .filter(z => z[1] != null && !isNaN(z[1]));
+
+    const tCls = t => t == null || isNaN(t) ? 'muted' : t >= 78 ? 'red' : t >= 75 ? 'amber' : 'green';
+
+    setPill('d-climate', 'live', 'HOME CLIMATE');
+    $('panel-climate').className = 'panel live-panel';
+
+    // Indoor AQI is a 0-100 quality SCORE (higher = better) — confirmed by
+    // your own automations, which fire when it drops below 95 / 75.
+    // The Daikin outdoor AQI is the opposite (EPA scale, lower = better),
+    // so it is deliberately left uncolored rather than scored on a guess.
+    const aqiCls = aqiIn == null ? 'muted' : aqiIn >= 95 ? 'green' : aqiIn >= 75 ? 'amber' : 'red';
+
+    setContent('c-climate', `
+      <div class="trio" style="align-items:center;margin-top:0">
+        <div>
+          <div class="t-lbl">Thermostat</div>
+          <div class="t-val amber">${setPt != null ? setPt.toFixed(0) : '—'}<span class="card-unit">°F</span></div>
+          <div class="card-sub">${hvacAct ? hvacAct.toUpperCase() : (running ? 'RUNNING' : 'IDLE')}</div>
+        </div>
+        <div>
+          <div class="gauge ${tCls(indoorF)}">${indoorF != null ? indoorF.toFixed(0) : '—'}<span class="card-unit">°F</span></div>
+          <div class="gauge-sub">Indoor · ${humid != null ? humid.toFixed(0) + '% RH' : '—'}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Air Quality</div>
+          <div class="t-val ${aqiCls}">${aqiIn != null ? aqiIn.toFixed(0) : '—'}</div>
+          <div class="card-sub">${aqiOut != null ? 'outdoor ' + aqiOut.toFixed(0) : '—'}</div>
+        </div>
+      </div>
+      <div class="trio">
+        <div>
+          <div class="t-lbl">Outdoor</div>
+          <div class="t-val amber">${outdoorF != null ? outdoorF.toFixed(0) : '—'}<span class="card-unit">°F</span></div>
+        </div>
+        <div>
+          <div class="t-lbl">HVAC</div>
+          <div class="t-val ${running ? 'blue' : 'muted'}">${(hvacW / 1000).toFixed(2)}<span class="card-unit"> kW</span></div>
+        </div>
+        <div>
+          <div class="t-lbl">Status</div>
+          <div class="t-val ${running ? 'blue' : 'muted'}">${running ? 'RUN' : 'IDLE'}</div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="trio">
+        ${zones.map(([n, t, h]) => `
+          <div>
+            <div class="t-lbl">${n}</div>
+            <div class="t-val ${tCls(t)}">${t.toFixed(1)}<span class="card-unit">°F</span></div>
+            <div class="card-sub">${h != null && !isNaN(h) ? h.toFixed(0) + '% RH' : '—'}</div>
+          </div>`).join('')}
+      </div>
+    `);
+  } catch (e) {
+    setPill('d-climate', 'dead', 'HOME CLIMATE');
+    $('panel-climate').className = 'panel dead-panel';
+    setContent('c-climate', errBox(`InfluxDB: ${e.message.slice(0, 60)}`));
+  }
+  setUpd('u-climate');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 8 — ENERGY FINANCIALS
+// ═══════════════════════════════════════════════════════════════
+async function updateFinancials() {
+  try {
+    const d    = await GET(`${CFG.PW}/api/powerwall`).then(r => r.json());
+    const t    = d.financials?.today   || {};
+    const mo   = d.financials?.monthly || {};
+    const rates= d.financials?.rates   || {};
+
+    const solarKwh = t.solar_kwh    || 0;
+    const impKwh   = t.import_kwh   || 0;
+    const expKwh   = t.export_kwh   || 0;
+    const net      = t.net_energy   || 0;
+    const impCost  = t.import_cost  || 0;
+    const expCrd   = t.export_credit|| 0;
+    const banked   = t.banked       || 0;
+    const moSolar  = mo.mo_solar_kwh || mo.solar_kwh || 0;
+    const bankBal  = mo.bank_balance || rates.bank || 0;
+    const moNet    = mo.mtd_net_energy ?? null;
+
+    setPill('d-fin', 'live', 'ENERGY FINANCIALS');
+    setContent('c-fin', `
+      <div class="sec">Today</div>
+      <div class="quad">
+        <div class="card">
+          <div class="card-lbl">Solar</div>
+          <div class="card-val amber">${solarKwh.toFixed(1)}<span class="card-unit"> kWh</span></div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">Exported</div>
+          <div class="card-val green">${expKwh.toFixed(1)}<span class="card-unit"> kWh</span></div>
+          <div class="card-sub">${fmtD(expCrd)}</div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">Imported</div>
+          <div class="card-val blue">${impKwh.toFixed(1)}<span class="card-unit"> kWh</span></div>
+          <div class="card-sub">${fmtD(impCost)}</div>
+        </div>
+        <div class="card">
+          <div class="card-lbl">Net Cost</div>
+          <div class="card-val ${net <= 0 ? 'green' : 'amber'}">${fmtD(net)}</div>
+          <div class="card-sub">bank ${fmtD(banked)}</div>
+        </div>
+      </div>
+      <div class="sec">Month-to-Date</div>
+      <div class="trio">
+        <div>
+          <div class="t-lbl">Solar</div>
+          <div class="t-val amber">${moSolar.toFixed(0)}<span class="card-unit"> kWh</span></div>
+        </div>
+        <div>
+          <div class="t-lbl">Net Cost</div>
+          <div class="t-val ${moNet !== null && moNet <= 2 ? 'green' : 'amber'}">${moNet !== null ? fmtD(moNet) : '—'}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Bank Credit</div>
+          <div class="t-val green">${fmtD(bankBal)}</div>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:.6rem;color:var(--dim);margin-top:.19rem;white-space:nowrap;overflow:hidden">
+        ${rates.energy ? `${(rates.energy*100).toFixed(1)}¢ import · ${(rates.buyback*100).toFixed(1)}¢ buyback` : ''}
+      </div>
+    `);
+  } catch(e) {
+    setPill('d-fin', 'dead', 'ENERGY FINANCIALS');
+    setContent('c-fin', errBox(`Powerwall API: ${e.message.slice(0,50)}`));
+  }
+  setUpd('u-fin');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 8 — SYSMON GUARDIAN
+// ═══════════════════════════════════════════════════════════════
+async function updateSysmon() {
+  try {
+    // The `remediation` measurement has NO numeric field — each hardening item
+    // stores a string status ("resolved" / "monitoring" / ...). The old code ran
+    // mean() over those strings, which threw, and the catch blamed CORS.
+    // Score is derived from the ratio of resolved items instead.
+    const remCSV = await INFLUX(`
+from(bucket: "${BUCKETS.sysmon}")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "${SYSMON.remediationMeasurement}" and r._field == "status")
+  |> last()
+  |> keep(columns: ["item", "_value", "_time"])`);
+
+    influxOK = true;
+    const rem      = parseCSV(remCSV);
+    const total    = rem.length;
+    const isDone   = r => (r._value || '').toLowerCase() === 'resolved';
+    const resolved = rem.filter(isDone).length;
+    const open     = rem.filter(r => !isDone(r));
+    const score    = total ? (resolved / total) * 100 : null;
+
+    // AI triage runs nightly, not every 15 min — look back far enough to find one.
+    let verdict = 'N/A', vAge = '';
+    try {
+      const tCSV = await INFLUX(`
+from(bucket: "${BUCKETS.sysmon}")
+  |> range(start: -30d)
+  |> filter(fn: (r) => r._measurement == "${SYSMON.triageMeasurement}" and r._field == "verdict")
+  |> last()
+  |> keep(columns: ["_value", "_time"])`);
+      const t = parseCSV(tCSV);
+      if (t.length) {
+        verdict  = t[0]._value || 'N/A';
+        const dd = Math.floor((Date.now() - Date.parse(t[0]._time)) / 86400000);
+        vAge     = dd <= 0 ? 'today' : dd === 1 ? '1d ago' : `${dd}d ago`;
+      }
+    } catch (e) { /* triage is optional — never fail the panel on it */ }
+
+    const sc       = score ?? 0;
+    const scoreCls = sc >= 90 ? 'green' : sc >= 70 ? 'amber' : 'red';
+    const barCls   = sc >= 90 ? 'green' : sc >= 70 ? 'warn'  : 'red';
+    const vCls     = verdict === 'INVESTIGATE' ? 'red'
+                   : verdict === 'WATCH'       ? 'amber'
+                   : verdict === 'N/A'         ? 'muted' : 'green';
+
+    setPill('d-sec', 'live', 'SYSMON GUARDIAN');
+    $('panel-sec').className = 'panel live-panel';
+    setContent('c-sec', `
+      <div class="gauge ${scoreCls}">${score !== null ? sc.toFixed(0) : '?'}<span style="font-size:1.4rem">%</span></div>
+      <div class="gauge-sub">Hardening Score</div>
+      ${bar('Remediated', sc, `${resolved}/${total}`, barCls)}
+      <hr class="divider">
+      ${mrow('AI Triage', `<span class="${vCls}">● ${verdict}</span>${vAge ? ` <span class="muted">(${vAge})</span>` : ''}`)}
+      ${mrow('Open Items', open.length
+        ? `<span class="amber">${open.map(o => o.item).join(', ')}</span>`
+        : '<span class="green">None</span>')}
+      ${mrow('Sysmon', '<span class="green">v15.20 Active</span>')}
+    `);
+  } catch(e) {
+    setPill('d-sec', 'dead', 'SYSMON GUARDIAN');
+    $('panel-sec').className = 'panel dead-panel';
+    setContent('c-sec', errBox(`InfluxDB: ${e.message.slice(0,70)}`));
+  }
+  setUpd('u-sec');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ALERT ENGINE  — feeds the center PUSH tile
+// ═══════════════════════════════════════════════════════════════
+let ALERTS   = [];
+let lastPW   = null;    // set by updatePowerwall
+let influxOK = false;   // set by any successful INFLUX() call
+let ringStale = false;
+
+const SEV_RANK = { critical: 0, warn: 1, info: 2 };
+// `extra` lets an alert carry a camera snapshot URL (see RING below).
+const raise = (sev, icon, title, detail, extra) =>
+  ALERTS.push(Object.assign({ sev, icon, title, detail }, extra || {}));
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 3 — SECURITY & HOME   (leaks · garage · doors · motion)
+//  All from InfluxDB. Ring cameras publish to event.* entities;
+//  their binary_sensor.* counterparts went stale on 2026-05-22.
+// ═══════════════════════════════════════════════════════════════
+// Built from config.cameras. Keyed by the motion event entity.
+const CAMS = CONF.cameras || [];
+const RING = {};
+CAMS.forEach(c => {
+  if (c.motion) RING[c.motion] = { label: c.label, cam: c.camera, severity: c.severity || 'info' };
+});
+const DING_CAM = CAMS.find(c => c.ding);   // the doorbell, if you have one
+
+// ── How long an event stays on the push tile ───────────────────
+// A camera sends an EVENT — "motion happened at T" — never "motion stopped".
+// There is no clear signal to wait for, so the deck holds the alert for a
+// fixed window from the event timestamp and then falls back to the clock.
+// Re-triggering refreshes the timestamp and restarts the window: a lingerer
+// keeps the tile up, a passer-by clears on their own.
+const MOTION_WINDOW_MS = ALRT.motionWindowMs;
+const DING_WINDOW_MS   = ALRT.dingWindowMs;
+
+// ── Per-camera framing (from config) ───────────────────────────
+// Doorbells shoot a SQUARE fisheye into a WIDE tile, so `object-fit: cover`
+// crops top and bottom evenly — which on a doorbell means a faceful of porch
+// ceiling and no person. `crop` biases it low; `zoom` tightens around the
+// same focal point.
+const CAM_CROP = {};
+const CAM_ZOOM = {};
+CAMS.forEach(c => {
+  CAM_CROP[c.camera] = c.crop || 'center 55%';
+  CAM_ZOOM[c.camera] = c.zoom || 1;
+});
+
+// Per-camera access tokens, read from InfluxDB each poll. HA rotates them
+// every few minutes and writes each rotation into the homeassistant bucket,
+// so this stays fresh without us holding an HA long-lived token.
+let CAM_TOKENS = {};
+const camURL = cam =>
+  CAM_TOKENS[cam] ? `${CFG.HA}/api/camera_proxy/${cam}?token=${CAM_TOKENS[cam]}` : null;
+
+async function updateHome() {
+  try {
+    const B  = BUCKETS.homeassistant;
+    const fT = E.fridgeTempF, zT = E.freezerTempF;
+
+    const [leakCSV, coverCSV, doorCSV, motionCSV, ringCSV, dingCSV, camCSV, fridgeCSV] = await Promise.all([
+      INFLUX(`from(bucket:"${B}") |> range(start:-24h) |> filter(fn:(r)=> r._measurement =~ /${PAT.leaks || 'moisture$'}/ and r._field=="value") |> last() |> keep(columns:["_measurement","_value"])`),
+      INFLUX(`from(bucket:"${B}") |> range(start:-24h) |> filter(fn:(r)=> r._measurement=="${E.garage}" and r._field=="state") |> last() |> keep(columns:["_value"])`),
+      PAT.fridgeDoors
+        ? INFLUX(`from(bucket:"${B}") |> range(start:-24h) |> filter(fn:(r)=> r._measurement =~ /${PAT.fridgeDoors}/ and r._field=="value") |> last() |> keep(columns:["_measurement","_value"])`)
+        : Promise.resolve(''),
+      INFLUX(`from(bucket:"${B}") |> range(start:-24h) |> filter(fn:(r)=> r._measurement =~ /${PAT.interiorMotion || '_motion$'}/ and r._field=="value") |> last() |> keep(columns:["_measurement","_value","_time"])`),
+      INFLUX(`from(bucket:"${B}") |> range(start:-30d) |> filter(fn:(r)=> r._measurement =~ /^event\\..*_motion$/ and r._field=="state") |> last() |> keep(columns:["_measurement","_value"])`),
+      // DOORBELL — the single most important thing this deck can tell you.
+      DING_CAM
+        ? INFLUX(`from(bucket:"${B}") |> range(start:-30d) |> filter(fn:(r)=> r._measurement=="${DING_CAM.ding}" and r._field=="state") |> last() |> keep(columns:["_value"])`)
+        : Promise.resolve(''),
+      // Camera snapshot tokens. HA rotates these and writes every rotation
+      // into Influx — which is why no HA token is needed anywhere.
+      INFLUX(`from(bucket:"${B}") |> range(start:-24h) |> filter(fn:(r)=> r._measurement =~ /^camera\\./ and r._field=="access_token_str") |> last() |> keep(columns:["_measurement","_value"])`),
+      // Fridge + freezer temps.
+      // -7d, NOT -6h. Appliance sensors often report ON CHANGE ONLY, so a
+      // steady 37°F can sit untouched for many hours. A short window made the
+      // tile show "—" on a perfectly healthy fridge. Keep _time so we can flag
+      // a reading that really HAS gone stale, instead of passing an old number
+      // off as current.
+      (fT && zT)
+        ? INFLUX(`from(bucket:"${B}") |> range(start:-7d) |> filter(fn:(r)=> r._measurement=="°F" and r._field=="value" and (r.entity_id=="${fT}" or r.entity_id=="${zT}")) |> last() |> keep(columns:["entity_id","_value","_time"])`)
+        : Promise.resolve(''),
+    ]);
+    influxOK = true;
+
+    // Refresh camera snapshot tokens
+    CAM_TOKENS = {};
+    parseCSV(camCSV).forEach(r => { CAM_TOKENS[r._measurement] = r._value; });
+
+    // ── Leaks (any wet sensor = critical) ──────────────────────
+    const leaks = parseCSV(leakCSV).map(r => ({
+      name: r._measurement.replace('binary_sensor.', '').replace(/_(leak_sensor_)?moisture$/, '').replace(/_/g, ' '),
+      wet:  parseFloat(r._value) === 1,
+    }));
+    const wet = leaks.filter(l => l.wet);
+    wet.forEach(l => raise('critical', '💧', 'WATER LEAK', l.name.toUpperCase()));
+
+    // ── Garage ────────────────────────────────────────────────
+    const garageRows = parseCSV(coverCSV);
+    const garage = garageRows.length ? String(garageRows[0]._value) : '?';
+    const garageOpen = /open/i.test(garage);
+    if (garageOpen) raise('warn', '🚪', 'GARAGE OPEN', 'Cove Garage is not closed');
+
+    // ── Fridge / freezer doors ────────────────────────────────
+    // Doors still drive the push alert; the tile now shows TEMPS instead,
+    // which is the number that actually tells you something is wrong.
+    let fridgeOpen = false;
+    parseCSV(doorCSV).forEach(r => {
+      if (parseFloat(r._value) === 1) {
+        fridgeOpen = true;
+        const n = /freezer/.test(r._measurement) ? 'Freezer' : 'Fridge';
+        raise('info', '🧊', `${n.toUpperCase()} DOOR OPEN`, 'Left open');
+      }
+    });
+
+    // ── Fridge / freezer temperatures ─────────────────────────
+    const T = {}, TT = {};
+    parseCSV(fridgeCSV).forEach(r => {
+      T[r.entity_id]  = parseFloat(r._value);
+      TT[r.entity_id] = Date.parse(r._time);
+    });
+    const fridgeT  = T[E.fridgeTempF];
+    const freezerT = T[E.freezerTempF];
+    const num = v => v != null && !isNaN(v);
+
+    // Reports on change only, so "old" is normal. But if nothing has come
+    // through in 48h the sensor is probably dead — say so instead of
+    // presenting a stale number as if it were current.
+    const tAge  = Math.max(TT[E.fridgeTempF] || 0, TT[E.freezerTempF] || 0);
+    const tDead = !tAge || (Date.now() - tAge > 48 * 3600000);
+
+    // Food-safe: fridge <= 40°F, freezer <= 5°F (FDA guidance).
+    const fCls = tDead || !num(fridgeT)  ? 'muted' : fridgeT  <= 40 ? 'green' : fridgeT  <= 45 ? 'amber' : 'red';
+    const zCls = tDead || !num(freezerT) ? 'muted' : freezerT <= 5  ? 'green' : freezerT <= 10 ? 'amber' : 'red';
+
+    if (!tDead && num(fridgeT)  && fridgeT  > 45) raise('warn', '🧊', 'FRIDGE TOO WARM',  `${fridgeT.toFixed(0)}°F`);
+    if (!tDead && num(freezerT) && freezerT > 10) raise('warn', '🧊', 'FREEZER TOO WARM', `${freezerT.toFixed(0)}°F`);
+
+    // ── Interior motion (Amazon Echo ultrasound presence) ──────
+    // Living Room / Bedroom / Office are Echo Dots. When you're HOME this is
+    // just you walking around — it is NOT an alert, and pushing it to the
+    // center tile would train you to ignore the center tile.
+    //
+    // Deliberately does NOT raise(). It is displayed on this tile only.
+    //
+    // FUTURE — away mode: when presence says nobody is home, flip
+    // AWAY_MODE to true and interior motion becomes a real security alert.
+    // Hook it to device_tracker.iphone / an input_boolean in HA.
+    const AWAY_MODE = ALRT.awayMode;
+
+    const motion = parseCSV(motionCSV).filter(r => !isNaN(parseFloat(r._value)));
+    const activeMotion = motion.filter(r => parseFloat(r._value) === 1);
+    if (AWAY_MODE) {
+      activeMotion.forEach(r => {
+        const n = r._measurement.replace('binary_sensor.', '').replace(/_motion$/, '').replace(/_/g, ' ');
+        raise('critical', '👁', 'INTRUDER — MOTION WHILE AWAY', n.toUpperCase());
+      });
+    }
+
+    // ── DOORBELL ──────────────────────────────────────────────
+    // Highest-value alert on the deck. 2-minute window: a ding is a
+    // moment, not a state — someone is at the door RIGHT NOW.
+    const dingRows = parseCSV(dingCSV);
+    if (dingRows.length) {
+      const dt = Date.parse(dingRows[0]._value);
+      if (!isNaN(dt) && Date.now() - dt < DING_WINDOW_MS) {
+        // The doorbell camera is whichever camera in config has `ding: '...'`.
+        // Nothing here is allowed to know your entity names.
+        const dc = DING_CAM;
+        raise('critical', '🔔', 'DOORBELL',
+              `Someone is at the ${dc ? dc.label.toLowerCase() : 'door'}`,
+              dc ? { img: camURL(dc.camera), cam: dc.camera } : undefined);
+      }
+    }
+
+    // ── Ring exterior cameras (event.* entities) ──────────────
+    // state = ISO timestamp of the last motion event.
+    let ringNewest = 0;
+    const ringRows = parseCSV(ringCSV);
+    ringRows.forEach(r => {
+      const cfg = RING[r._measurement];
+      if (!cfg) return;
+      const t = Date.parse(r._value);
+      if (isNaN(t)) return;
+      if (t > ringNewest) ringNewest = t;
+      if (Date.now() - t < MOTION_WINDOW_MS) {
+        raise(
+          cfg.severity,
+          '📹',
+          `${cfg.label.toUpperCase()} MOTION`,
+          new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+          { img: camURL(cfg.cam), cam: cfg.cam }   // live snapshot behind the text
+        );
+      }
+    });
+    // If Ring hasn't produced an event in 7 days the integration is dead —
+    // say so loudly rather than showing a tile that silently never fires.
+    ringStale = !ringNewest || (Date.now() - ringNewest > 7 * 86400000);
+
+    const ringAge = ringNewest ? Math.floor((Date.now() - ringNewest) / 86400000) : null;
+
+    setPill('d-home', wet.length ? 'dead' : garageOpen ? 'warn' : 'live', 'HOME SENSORS');
+    $('panel-home').className = `panel ${wet.length ? 'dead-panel' : 'live-panel'}`;
+
+    setContent('c-home', `
+      <div class="trio">
+        <div>
+          <div class="t-lbl">Garage</div>
+          <div class="t-val ${garageOpen ? 'red' : 'green'}">${garage.toUpperCase()}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Water Leaks</div>
+          <div class="t-val ${wet.length ? 'red' : 'green'}">${wet.length ? wet.length + ' WET' : 'DRY'}</div>
+          <div class="card-sub">${leaks.length} sensors</div>
+        </div>
+        <div>
+          <div class="t-lbl">Fridge</div>
+          <div class="t-val"><span class="${fCls}">${num(fridgeT) ? fridgeT.toFixed(0) : '—'}</span><span class="muted"> / </span><span class="${zCls}">${num(freezerT) ? freezerT.toFixed(0) : '—'}</span><span class="card-unit">°F</span></div>
+          <div class="card-sub">${tDead ? '<span class="red">stale</span>'
+            : fridgeOpen ? '<span class="amber">door open</span>'
+            : 'doors shut'}</div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="trio">
+        <div>
+          <div class="t-lbl">Int Motion</div>
+          <div class="t-val ${activeMotion.length ? 'blue' : 'green'}">${activeMotion.length ? activeMotion.length + ' ACTIVE' : 'CLEAR'}</div>
+          <div class="card-sub">${AWAY_MODE ? '<span class="red">AWAY — armed</span>' : 'home · not alarmed'}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Ext Cams</div>
+          <div class="t-val ${ringStale ? 'red' : 'green'}">${ringStale ? 'STALE' : 'LIVE'}</div>
+          <div class="card-sub">${ringStale ? (ringAge != null ? ringAge + 'd silent' : 'never') : '3 cameras'}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Leak Batt</div>
+          <div class="t-val green">OK</div>
+          <div class="card-sub">6 sensors</div>
+        </div>
+      </div>
+      ${ringStale ? `<div class="setup-note red">Ring event listener dead — HA → Ring → Reload</div>` : ''}
+    `);
+  } catch (e) {
+    setPill('d-home', 'dead', 'HOME SENSORS');
+    $('panel-home').className = 'panel dead-panel';
+    setContent('c-home', errBox(`InfluxDB: ${e.message.slice(0, 60)}`));
+  }
+  setUpd('u-home');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 8 — WEATHER  (Powerwall server :3002)
+// ═══════════════════════════════════════════════════════════════
+// Forecast rows come back with ISO timestamps ("2026-07-12T00:00").
+// Render them as "12 AM", not raw ISO.
+function hourLabel(v) {
+  if (!v) return '';
+  const t = Date.parse(v);
+  if (isNaN(t)) return String(v).slice(0, 5);
+  return new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }).replace(' ', '');
+}
+
+async function updateWeather() {
+  try {
+    // Outdoor AQI comes from HA (Daikin), not the Powerwall weather API.
+    // EPA scale here — LOWER is better (unlike the indoor air-quality
+    // monitor score on the Climate tile, where higher is better).
+    let aqiOut = null;
+    try {
+      const rows = parseCSV(await INFLUX(`
+from(bucket: "${BUCKETS.homeassistant}")
+  |> range(start: -6h)
+  |> filter(fn: (r) => r._measurement == "${AQI_OUT.entity}" and r._field == "value")
+  |> last()
+  |> keep(columns: ["_value"])`));
+      if (rows.length) aqiOut = parseFloat(rows[0]._value);
+    } catch (_) { /* AQI is optional — never fail the weather panel on it */ }
+
+    const aqiCls = aqiOut == null ? 'muted'
+                 : aqiOut <= 50   ? 'green'     // Good
+                 : aqiOut <= 100  ? 'amber'     // Moderate
+                 : 'red';                       // Unhealthy
+    const aqiLabel = aqiOut == null ? '—'
+                   : aqiOut <= 50   ? 'good'
+                   : aqiOut <= 100  ? 'moderate'
+                   : aqiOut <= 150  ? 'unhealthy (sens.)'
+                   : 'unhealthy';
+
+    const d  = await GET(`${CFG.PW}/api/weather-forecast`).then(r => r.json());
+    const c  = d.current || {};
+    // The API returns the whole day from midnight. Show only hours that
+    // are still AHEAD of us. (The old filter had a 1h grace window, so at
+    // 9:54 it still listed the 9AM slot — an hour that had already gone.
+    // The current conditions are already the big number above; the strip
+    // is a forecast, so it should start at the NEXT hour.)
+    const now = Date.now();
+    const all = d.hourly || [];
+    const upcoming = all.filter(h => {
+      const t = Date.parse(h.time || h.hour);
+      return !isNaN(t) && t > now;
+    });
+    const hr = (upcoming.length ? upcoming : all).slice(0, 4);
+
+    (d.alerts || []).forEach(a =>
+      raise('warn', '⚠', 'WEATHER ALERT', (a.event || a.headline || 'Advisory').toUpperCase()));
+
+    setPill('d-wx', 'live', 'WEATHER');
+    $('panel-wx').className = 'panel live-panel';
+    // Mirrors the Home Climate tile exactly: [context] · big gauge · AQI
+    setContent('c-wx', `
+      <div class="trio" style="align-items:center;margin-top:0">
+        <div>
+          <div class="t-lbl">Feels Like</div>
+          <div class="t-val amber">${c.feels_like_f != null ? Math.round(c.feels_like_f) : '—'}<span class="card-unit">°F</span></div>
+          <div class="card-sub">${c.cloud_pct != null ? c.cloud_pct + '% cloud' : '—'}</div>
+        </div>
+        <div>
+          <div style="font-size:1.5rem;line-height:1.1">${c.icon || '☁'}</div>
+          <div class="gauge amber">${c.temp_f != null ? Math.round(c.temp_f) : '—'}<span class="card-unit">°F</span></div>
+          <div class="gauge-sub">${(c.desc || '').toUpperCase() || '—'}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Outdoor AQI</div>
+          <div class="t-val ${aqiCls}">${aqiOut != null ? aqiOut.toFixed(0) : '—'}</div>
+          <div class="card-sub">${aqiLabel}</div>
+        </div>
+      </div>
+      <div class="trio">
+        <div>
+          <div class="t-lbl">Humidity</div>
+          <div class="t-val blue">${c.humidity != null ? c.humidity : '—'}<span class="card-unit">%</span></div>
+        </div>
+        <div>
+          <div class="t-lbl">Wind</div>
+          <div class="t-val muted">${c.wind_mph != null ? Math.round(c.wind_mph) : '—'}<span class="card-unit"> mph</span></div>
+          <div class="card-sub">${c.wind_dir || ''}</div>
+        </div>
+        <div>
+          <div class="t-lbl">Precip</div>
+          <div class="t-val ${(c.precip_in || 0) > 0 ? 'blue' : 'muted'}">${(c.precip_in ?? 0).toFixed(2)}<span class="card-unit"> in</span></div>
+        </div>
+      </div>
+      ${hr.length ? `<div class="quad" style="margin-top:.31rem">
+        ${hr.map(h => `
+          <div style="text-align:center">
+            <div class="t-lbl">${hourLabel(h.time || h.hour)}</div>
+            <div style="font-size:.95rem;line-height:1.2">${h.icon || '☁'}</div>
+            <div class="t-val amber" style="font-size:.85rem">${h.temp_f != null ? Math.round(h.temp_f) : '—'}°</div>
+          </div>`).join('')}
+      </div>` : ''}
+      ${(d.alerts || []).length ? `<div style="text-align:center;margin-top:.31rem"><span class="badge red">${d.alerts.length} ACTIVE ALERT(S)</span></div>` : ''}
+    `);
+  } catch (e) {
+    setPill('d-wx', 'dead', 'WEATHER');
+    $('panel-wx').className = 'panel dead-panel';
+    setContent('c-wx', errBox(`Powerwall API: ${e.message.slice(0, 50)}`));
+  }
+  setUpd('u-wx');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL 5 — SERVICES & STATUS
+//  Absorbs the old System Status panel + the header's ONLINE pill.
+//  NOTE: the old panel called InfluxDB /health with no auth header
+//  and reported "Offline / CORS" even when Influx was perfectly fine.
+//  We now report Influx status from whether our real queries worked.
+// ═══════════════════════════════════════════════════════════════
+async function updateServices() {
+  // NOTE: this is a raw fetch, not GET(), because a no-cors ping is the only
+  // way to test reachability of a service that sends no CORS headers. It has
+  // to be intercepted separately in demo mode.
+  const results = await Promise.allSettled(
+    SVCS.map(s => DEMO
+      ? Promise.resolve(window.__DEMO_PING(s))
+      : fetch(s.u, { mode: 'no-cors', signal: AbortSignal.timeout(3000) })
+          .then(() => true).catch(() => false))
+  );
+  const statuses = SVCS.map((s, i) => ({
+    ...s,
+    up: results[i].status === 'fulfilled' && results[i].value === true,
+  }));
+  const upN  = statuses.filter(s => s.up).length;
+  const down = statuses.filter(s => !s.up);
+
+  down.forEach(s => raise('warn', '🔌', 'SERVICE DOWN', s.n));
+
+  // Powerwall server health (uptime etc.)
+  let pwUp = false, pwUptime = '—';
+  try {
+    const h   = await GET(`${CFG.PW}/api/health`).then(r => r.json());
+    const upH = Math.floor((h.uptime || 0) / 3600);
+    const upM = Math.floor(((h.uptime || 0) % 3600) / 60);
+    pwUp     = true;
+    pwUptime = `${upH}h ${upM}m up`;
+    if ((h.poll_errors || 0) > 5) raise('warn', '⚠', 'POWERWALL POLL ERRORS', `${h.poll_errors} errors`);
+  } catch (_) {
+    raise('warn', '⚡', 'POWERWALL SERVER OFFLINE', 'Port 3002 not responding');
+  }
+
+  // Docker daemon. This replaced a "Polls" counter, which only ever counted
+  // up and told you nothing — every tile already stamps its own update time.
+  // Docker is the real thing worth watching: if the daemon dies, InfluxDB,
+  // Home Assistant, Grafana, ntfy, SearXNG and Open WebUI all go with it.
+  let dk = { ok: false, running: 0 };
+  try { dk = await GET('/api/docker').then(r => r.json()); } catch (_) {}
+  if (!dk.ok) raise('critical', '🐳', 'DOCKER DAEMON DOWN', 'All containers unreachable');
+
+  const allUp = upN === SVCS.length;
+  const state = allUp ? 'live' : upN >= SVCS.length * 0.75 ? 'warn' : 'dead';
+
+  // Header and status merged into ONE line — the panel title IS the status.
+  setPill('d-svc', state, allUp ? `ALL SYSTEMS ONLINE · ${upN}/${SVCS.length}` : `${upN}/${SVCS.length} ONLINE`);
+  $('panel-svc').className = `panel ${allUp ? 'live-panel' : 'panel'}`;
+
+  setContent('c-svc', `
+    <div class="svc-grid">
+      ${statuses.map(s => `
+        <div class="svc-row">
+          <span class="sdot ${s.up ? 'live' : 'dead'}"></span>
+          <span class="${s.up ? '' : 'muted'}">${s.n}</span>
+        </div>`).join('')}
+    </div>
+    <hr class="divider">
+    <div class="trio">
+      <div>
+        <div class="t-lbl">Powerwall</div>
+        <div class="t-val ${pwUp ? 'green' : 'red'}">${pwUp ? 'ONLINE' : 'OFFLINE'}</div>
+        <div class="card-sub">${pwUptime}</div>
+      </div>
+      <div>
+        <div class="t-lbl">InfluxDB</div>
+        <div class="t-val ${influxOK ? 'green' : 'red'}">${influxOK ? 'ONLINE' : 'OFFLINE'}</div>
+      </div>
+      <div>
+        <div class="t-lbl">Docker</div>
+        <div class="t-val ${dk.ok ? (dk.running >= 6 ? 'green' : 'amber') : 'red'}">${dk.ok ? dk.running : 'DOWN'}</div>
+        <div class="card-sub">${dk.ok ? 'containers up' : 'daemon unreachable'}</div>
+      </div>
+    </div>
+  `);
+  setUpd('u-svc');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CENTER PUSH TILE
+//  Quiet: dimmed clock + date (the header used to hold these).
+//  Loud:  highest-priority alert takes the whole tile.
+// ═══════════════════════════════════════════════════════════════
+function updateClock() {
+  const now = new Date();
+  const c = $('push-clock'), d = $('push-date');
+  if (c) c.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  if (d) d.textContent = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
+}
+
+let pushIdx  = 0;
+let pushTick = null;
+
+// The rotation is: every alert (severity order), then the clock, repeat.
+//   2 issues →  issue1 · issue2 · clock · issue1 · issue2 · clock · …
+//   1 issue  →  issue1 · clock · issue1 · clock · …
+//   0 issues →  clock, held.
+// The clock is always the last slot, so the deck returns to "resting"
+// between alerts instead of hammering you with them non-stop.
+function pushSlots() {
+  return ALERTS.length ? [...ALERTS, { clock: true }] : [{ clock: true }];
+}
+
+function dotsHTML(slots) {
+  return `<div class="push-dots">${slots.map((x, i) =>
+    `<span class="pdot ${x.clock ? 'pdot-clock' : 'pdot-' + x.sev} ${i === pushIdx ? 'on' : ''}"></span>`
+  ).join('')}</div>`;
+}
+
+function drawPush() {
+  const el   = $('panel-push');
+  const body = $('c-push');
+  if (!el || !body) return;
+
+  const slots = pushSlots();
+  if (pushIdx >= slots.length) pushIdx = 0;
+  const s = slots[pushIdx];
+
+  // ── Clock slot ────────────────────────────────────────────────
+  if (s.clock) {
+    const n = ALERTS.length;
+    el.className = 'panel push';
+    body.innerHTML = `
+      <div class="push-clock" id="push-clock">--:--:--</div>
+      <div class="push-date"  id="push-date">---</div>
+      <div class="push-quiet">${n ? `◦ ${n} OPEN ISSUE${n > 1 ? 'S' : ''}` : '◦ All clear'}</div>
+      ${n ? dotsHTML(slots) : ''}`;
+    updateClock();
+    return;
+  }
+
+  // ── Camera alert: snapshot fills the tile, text overlaid ─────
+  if (s.img) {
+    const crop = CAM_CROP[s.cam] || 'center 55%';
+    const zoom = CAM_ZOOM[s.cam] || 1;
+    // transform-origin matches the crop point, so zooming tightens the
+    // existing framing instead of drifting away from it.
+    const fit = `object-position:${crop};transform:scale(${zoom});transform-origin:${crop};`;
+    el.className = `panel push push-${s.sev} push-photo`;
+    body.innerHTML = `
+      <img class="push-cam" src="${s.img}&_=${Date.now()}" data-base="${s.img}"
+           style="${fit}" alt="">
+      <div class="push-scrim"></div>
+      <div class="push-fg">
+        <div class="push-title">${s.title}</div>
+        <div class="push-detail">${s.detail}</div>
+        <div class="push-count">${pushIdx + 1} / ${ALERTS.length} ISSUE${ALERTS.length > 1 ? 'S' : ''}</div>
+        ${dotsHTML(slots)}
+      </div>`;
+    return;
+  }
+
+  // ── Plain alert slot ──────────────────────────────────────────
+  el.className = `panel push push-${s.sev}`;
+  body.innerHTML = `
+    <div class="push-icon">${s.icon}</div>
+    <div class="push-title">${s.title}</div>
+    <div class="push-detail">${s.detail}</div>
+    <div class="push-time">${ts()}</div>
+    <div class="push-count">${pushIdx + 1} / ${ALERTS.length} ISSUE${ALERTS.length > 1 ? 'S' : ''}</div>
+    ${dotsHTML(slots)}`;
+}
+
+// Refresh the on-screen snapshot every 2s so a camera alert reads as a
+// low-framerate feed rather than a frozen still.
+setInterval(() => {
+  const img = document.querySelector('.push-cam');
+  if (!img || !img.dataset.base) return;
+  img.src = img.dataset.base + '&_=' + Date.now();
+}, 2000);
+
+// Called once per poll (10s). Only refreshes what's on screen —
+// it must NOT restart the rotation timer, or the 3s cadence would
+// reset to slot 0 every poll and never get past the first issue.
+function renderPush() {
+  ALERTS.sort((a, b) => SEV_RANK[a.sev] - SEV_RANK[b.sev]);
+  const slots = pushSlots();
+  if (pushIdx >= slots.length) pushIdx = 0;
+  drawPush();
+}
+
+// One persistent ticker. Runs forever, independent of the poll loop,
+// so cycling is constant until every issue clears.
+function startPushRotation() {
+  if (pushTick) clearInterval(pushTick);
+  pushTick = setInterval(() => {
+    const slots = pushSlots();
+    if (slots.length <= 1) { pushIdx = 0; return; }  // clock only — leave it be
+    pushIdx = (pushIdx + 1) % slots.length;
+    drawPush();
+  }, 3000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN POLL LOOP
+// ═══════════════════════════════════════════════════════════════
+async function pollAll() {
+  pollN++;
+  ALERTS = [];
+
+  await Promise.allSettled([
+    updateSystemHealth(),
+    updateClimate(),
+    updateHome(),
+    updateSysmon(),
+    updatePowerwall(),
+    updateFinancials(),
+    updateWeather(),
+  ]);
+
+  // Services runs last so influxOK reflects this poll's real queries.
+  await updateServices();
+
+  // Powerwall grid conditions.
+  // NOTE: battery sitting at reserve is NORMAL self-consumption behavior,
+  // not a fault. Do not alert on it.
+  if (lastPW) {
+    if (lastPW.grid_up === false)     raise('critical', '⚡', 'GRID DOWN', 'Running on battery');
+    if (lastPW.island === 'islanded') raise('critical', '⚡', 'ISLANDED', 'Disconnected from grid');
+  }
+
+  // Any panel that failed this poll
+  document.querySelectorAll('.dead-panel').forEach(p => {
+    const t = p.querySelector('.pill-txt');
+    if (t) raise('warn', '✖', 'PANEL OFFLINE', t.textContent);
+  });
+
+  renderPush();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SELF-UPDATE
+//  This runs on a wall display that nobody reloads by hand. Poll the
+//  server's build id (mtime of index.html); if it changed, reload.
+//  Without this the screen silently keeps running old code forever.
+// ═══════════════════════════════════════════════════════════════
+let buildId = null;
+async function checkBuild() {
+  try {
+    const h = await GET('/api/health').then(r => r.json());
+    if (buildId === null) { buildId = h.build; return; }
+    if (h.build && h.build !== buildId) location.reload();
+  } catch (_) { /* server restarting — ignore */ }
+}
+
+// ─── BOOT ─────────────────────────────────────────────────────
+updateClock();
+setInterval(updateClock, 1000);
+startPushRotation();          // constant 3s cycle, independent of polling
+checkBuild();
+setInterval(checkBuild, 15000);
+
+setTimeout(() => {
+  pollAll();
+  setInterval(pollAll, CFG.POLL_MS);
+}, 300);
+
+// ═══════════════════════════════════════════════════════════════
+//  SCREENSHOT FREEZE  (?freeze=HH:MM:SS)
+// ═══════════════════════════════════════════════════════════════
+if (FREEZE) {
+  // Built as DOM nodes with textContent, never an innerHTML string. FREEZE is
+  // already whitelisted to HH:MM:SS above, so this is belt-and-braces - but a
+  // URL parameter should never reach innerHTML regardless of how confident you
+  // are in the regex.
+  const mk = (cls, id, text) => {
+    const el = document.createElement('div');
+    el.className = cls;
+    if (id) el.id = id;
+    el.textContent = text;
+    return el;
+  };
+
+  const hold = () => {
+    const b = $('c-push');
+    if (b) {
+      const dateStr = new Date().toLocaleDateString('en-US',
+        { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
+      b.replaceChildren(
+        mk('push-clock', 'push-clock', FREEZE),
+        mk('push-date',  'push-date',  dateStr),
+        mk('push-quiet', null, '\u25E6 All clear')
+      );
+    }
+    // keep 'push': it carries position:relative, which anchors the NODE-05 badge
+    const p = $('panel-push');
+    if (p) p.className = 'panel push';
+    document.querySelectorAll('.upd').forEach(e => { e.textContent = 'Updated ' + FREEZE; });
+  };
+  setInterval(hold, 100);
+}
+</script>
+</body>
+</html>
