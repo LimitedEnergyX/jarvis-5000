@@ -269,11 +269,27 @@ Two tiles printed *"CORS Blocked"* regardless of the actual error. One was reall
 `unsupported aggregate column type string` — a measurement with no numeric field, being
 fed to `mean()`. I chased CORS twice. **Print the real error.**
 
-### 3. Same word, opposite meaning
+### 3. Same word, opposite meaning — and honest isn't the same as readable
 
 An indoor air-quality monitor reports a 0–100 **score** (higher = better). An outdoor
-sensor reports **EPA AQI** (lower = better). Both are called "AQI". Colour them the same
-way and your dashboard is confidently lying. `config.js` declares the scale per sensor.
+sensor reports **EPA AQI** (lower = better). Both are called "AQI".
+
+The first fix was to colour each one correctly for its own scale. That was *honest* and
+still *unreadable*: two numbers, side by side, under one label, running in opposite
+directions. Good air showed as **94 indoors and 18 outdoors**. You read a wall display in
+half a second — and in half a second, that looks like the inside of your house is filthy.
+
+The real fix is to **normalise, then colour once**. Both sensors are converted to a 0–100
+"higher is better" score and share a single rule. The raw EPA index survives in the
+sub-label, because that's the number every weather app quotes and throwing it away would
+be its own kind of lying.
+
+Convert along the source's **own category boundaries**, not a convenient straight line.
+A naive `100 - aqi` maps EPA 50 to a score of 50 — painting amber over a reading the EPA
+itself calls "Good". The piecewise map pins AQI 50 to exactly 90, so the colours agree
+with the official bands at every boundary.
+
+**A number that is technically correct and instantly misread is still a bug.**
 
 ### 4. Two sensors can measure the same electricity
 

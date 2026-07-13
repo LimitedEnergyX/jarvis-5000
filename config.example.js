@@ -108,12 +108,22 @@ window.JARVIS_CONFIG = {
     hvacPower: ['hvac_outdoor_power'],
 
     // Air quality.
-    // ⚠ These two often use OPPOSITE scales. An indoor air-quality monitor
-    // usually reports a 0-100 SCORE (higher = better); an outdoor sensor
-    // reports EPA AQI (LOWER = better). Declare the scale so the colours
-    // actually mean something.
-    aqiIndoor:  { entity: 'sensor.indoor_air_quality_index', scale: 'score' }, // higher = better
-    aqiOutdoor: { entity: 'sensor.outdoor_aqi',              scale: 'epa'   }, // lower  = better
+    // ⚠ These two almost always use OPPOSITE scales. An indoor monitor reports
+    // a 0-100 SCORE (higher = better); an outdoor sensor reports EPA AQI
+    // (LOWER = better). Shown side by side under one "AQI" label, good air
+    // reads as 94 indoors and 18 outdoors — which is unreadable at a glance,
+    // and a wall display is only ever read at a glance.
+    //
+    // Declare the scale and the deck NORMALISES both onto the same 0-100
+    // "higher is better" score, then colours them with one rule (>=90 good,
+    // >=75 fair). The raw EPA index is still shown in the sub-label, because
+    // it's the number every weather app quotes.
+    //
+    // 'score' — already 0-100, higher is better. Used as-is.
+    // 'epa'   — EPA AQI, converted via epaToScore() along the EPA's own band
+    //           boundaries (AQI 50 -> 90, 100 -> 75, 150 -> 50).
+    aqiIndoor:  { entity: 'sensor.indoor_air_quality_index', scale: 'score' },
+    aqiOutdoor: { entity: 'sensor.outdoor_aqi',              scale: 'epa'   },
 
     // Room temps at the bottom of NODE-06.
     zones: [

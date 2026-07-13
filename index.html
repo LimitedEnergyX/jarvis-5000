@@ -1297,17 +1297,57 @@ const C2F = c => (c * 9 / 5) + 32;
 const AQI_IN  = E.aqiIndoor  || { entity: '', scale: 'score' };
 const AQI_OUT = E.aqiOutdoor || { entity: '', scale: 'epa' };
 
-function aqiClass(v, scale) {
-  if (v == null || isNaN(v)) return 'muted';
-  return scale === 'epa'
-    ? (v <= 50 ? 'green' : v <= 100 ? 'amber' : 'red')    // lower = better
-    : (v >= 95 ? 'green' : v >= 75  ? 'amber' : 'red');   // higher = better
+// ONE SCALE, BOTH SENSORS.
+//
+// Previously each sensor was coloured correctly for its OWN scale — which was
+// honest but unreadable. The two sat side by side, both labelled "AQI", running
+// in OPPOSITE directions: good air read as 94 indoors and 18 outdoors. On a wall
+// you read a number in half a second. Two contradictory scales under one label
+// is worse than showing nothing, because it looks like it means something.
+//
+// So we NORMALISE instead: every sensor is converted to a 0-100 quality score
+// (higher = better) and then coloured by one rule. The raw EPA index is kept in
+// the sub-label — it's the number every weather app shows, and discarding it
+// would be its own kind of lying.
+//
+// epaToScore() maps EPA AQI along the EPA's OWN category boundaries, so the
+// colours agree with the official bands rather than a convenient straight line:
+//
+//   AQI   0 -> 100      AQI  50 -> 90   (top of "Good"     -> last green)
+//   AQI 100 -> 75       (top of "Moderate" -> last amber)
+//   AQI 150 -> 50       AQI 300+ -> 0
+//
+// A naive 100-aqi would have painted AQI 50 amber and contradicted the EPA
+// calling it "Good". Boundaries matter more than elegance here.
+function epaToScore(aqi) {
+  if (aqi == null || isNaN(aqi)) return null;
+  if (aqi <= 50)  return 100 - aqi * 0.20;           // 100 .. 90
+  if (aqi <= 100) return  90 - (aqi - 50)  * 0.30;   //  90 .. 75
+  if (aqi <= 150) return  75 - (aqi - 100) * 0.50;   //  75 .. 50
+  if (aqi <= 300) return Math.max(0, 50 - (aqi - 150) / 3);
+  return 0;
 }
+
+// Normalise ANY sensor to the 0-100 "higher is better" score, using the scale
+// declared for it in config. Add a scale here if your sensor uses another one.
+function aqiScore(v, scale) {
+  if (v == null || isNaN(v)) return null;
+  return scale === 'epa' ? epaToScore(v) : v;   // 'score' is already normalised
+}
+
+// One rule, every sensor. >=90 good, >=75 fair, else poor.
+function aqiClass(score) {
+  if (score == null || isNaN(score)) return 'muted';
+  return score >= 90 ? 'green' : score >= 75 ? 'amber' : 'red';
+}
+
+// The word stays true to the sensor's NATIVE scale — an EPA reading of 40 is
+// officially "good", and we say so, rather than inventing our own vocabulary.
 function aqiLabelFor(v, scale) {
   if (v == null || isNaN(v)) return '—';
   return scale === 'epa'
     ? (v <= 50 ? 'good' : v <= 100 ? 'moderate' : v <= 150 ? 'unhealthy (sens.)' : 'unhealthy')
-    : (v >= 95 ? 'excellent' : v >= 75 ? 'moderate' : 'poor');
+    : (v >= 90 ? 'excellent' : v >= 75 ? 'moderate' : 'poor');
 }
 
 async function updateClimate() {
@@ -1400,11 +1440,12 @@ from(bucket: "${BUCKETS.homeassistant}")
     setPill('d-climate', 'live', 'HOME CLIMATE');
     $('panel-climate').className = 'panel live-panel';
 
-    // Indoor AQI is a 0-100 quality SCORE (higher = better) — confirmed by
-    // your own automations, which fire when it drops below 95 / 75.
-    // The Daikin outdoor AQI is the opposite (EPA scale, lower = better),
-    // so it is deliberately left uncolored rather than scored on a guess.
-    const aqiCls = aqiIn == null ? 'muted' : aqiIn >= 95 ? 'green' : aqiIn >= 75 ? 'amber' : 'red';
+    // Both sensors normalised onto one scale (see aqiScore above), so the two
+    // numbers finally point the same way and share one colour rule.
+    const aqiInScore  = aqiScore(aqiIn,  AQI_IN.scale);
+    const aqiOutScore = aqiScore(aqiOut, AQI_OUT.scale);
+    const aqiCls      = aqiClass(aqiInScore);
+    const aqiOutCls   = aqiClass(aqiOutScore);
 
     setContent('c-climate', `
       <div class="trio" style="align-items:center;margin-top:0">
@@ -1419,8 +1460,8 @@ from(bucket: "${BUCKETS.homeassistant}")
         </div>
         <div>
           <div class="t-lbl">Air Quality</div>
-          <div class="t-val ${aqiCls}">${aqiIn != null ? aqiIn.toFixed(0) : '—'}</div>
-          <div class="card-sub">${aqiOut != null ? 'outdoor ' + aqiOut.toFixed(0) : '—'}</div>
+          <div class="t-val ${aqiCls}">${aqiInScore != null ? aqiInScore.toFixed(0) : '—'}<span class="card-unit">%</span></div>
+          <div class="card-sub">outdoor <span class="${aqiOutCls}">${aqiOutScore != null ? aqiOutScore.toFixed(0) + '%' : '—'}</span></div>
         </div>
       </div>
       <div class="trio">
@@ -1896,15 +1937,12 @@ from(bucket: "${BUCKETS.homeassistant}")
       if (rows.length) aqiOut = parseFloat(rows[0]._value);
     } catch (_) { /* AQI is optional — never fail the weather panel on it */ }
 
-    const aqiCls = aqiOut == null ? 'muted'
-                 : aqiOut <= 50   ? 'green'     // Good
-                 : aqiOut <= 100  ? 'amber'     // Moderate
-                 : 'red';                       // Unhealthy
-    const aqiLabel = aqiOut == null ? '—'
-                   : aqiOut <= 50   ? 'good'
-                   : aqiOut <= 100  ? 'moderate'
-                   : aqiOut <= 150  ? 'unhealthy (sens.)'
-                   : 'unhealthy';
+    // Same normalisation as the Climate tile — the two tiles must never disagree
+    // about the same sensor. Shared helpers, not a second copy: two copies drift,
+    // and then the deck contradicts itself, which is the whole bug we're fixing.
+    const aqiOutScore = aqiScore(aqiOut, AQI_OUT.scale);
+    const aqiCls      = aqiClass(aqiOutScore);
+    const aqiLabel    = aqiLabelFor(aqiOut, AQI_OUT.scale);
 
     const d  = await GET(`${CFG.PW}/api/weather-forecast`).then(r => r.json());
     const c  = d.current || {};
@@ -1940,9 +1978,11 @@ from(bucket: "${BUCKETS.homeassistant}")
           <div class="gauge-sub">${(c.desc || '').toUpperCase() || '—'}</div>
         </div>
         <div>
-          <div class="t-lbl">Outdoor AQI</div>
-          <div class="t-val ${aqiCls}">${aqiOut != null ? aqiOut.toFixed(0) : '—'}</div>
-          <div class="card-sub">${aqiLabel}</div>
+          <div class="t-lbl">Air Quality</div>
+          <div class="t-val ${aqiCls}">${aqiOutScore != null ? aqiOutScore.toFixed(0) : '—'}<span class="card-unit">%</span></div>
+          <div class="card-sub">${aqiOut != null && AQI_OUT.scale === 'epa'
+            ? 'AQI ' + aqiOut.toFixed(0) + ' · ' + aqiLabel
+            : aqiLabel}</div>
         </div>
       </div>
       <div class="trio">
