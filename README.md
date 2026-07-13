@@ -197,6 +197,24 @@ Verified with **zero clipping** at **1920×1080** and **3840×2160 (4K)** — th
 matter for a wall panel. It scales continuously rather than to a list of breakpoints, so
 sizes in between work too, but those two are what's actually tested.
 
+### On a phone
+
+The no-scroll rule cannot survive a 390px screen — nine tiles would be ~90px
+tall. Below 640px the deck deliberately breaks its own invariant: single column,
+auto height, vertical scroll, and the push tile pulled to the **top** (an alert
+tile five swipes down the page is not an alert tile). Tablets get two columns.
+All of it is inside media queries; the wall never sees any of it.
+
+Two traps, both of which bit this file:
+
+- The responsive rules must sit at the **end** of the stylesheet. Breakpoints
+  near the top did nothing for months, because the kiosk block re-declared
+  `.dash` below them and won on source order.
+- Grid items default to `min-width: auto` and **refuse to shrink below their
+  content**. The `white-space: nowrap` that keeps columns on a straight baseline
+  at 4K makes the whole *page* wider than a phone. `min-width: 0` plus re-allowing
+  wrap; either alone still overflows.
+
 **There is no scrolling anywhere, by design** — it's bolted to a wall; nobody can scroll it.
 If you add content, verify it still fits:
 
@@ -257,7 +275,30 @@ An indoor air-quality monitor reports a 0–100 **score** (higher = better). An 
 sensor reports **EPA AQI** (lower = better). Both are called "AQI". Colour them the same
 way and your dashboard is confidently lying. `config.js` declares the scale per sensor.
 
-### 4. `localhost` is not a hostname, it's a perspective
+### 4. Two sensors can measure the same electricity
+
+The deck summed a heat pump's "indoor power" and "outdoor power" and reported
+**2.11 kW of HVAC inside a 1.66 kW house**. The indoor sensor wasn't the air
+handler — it was a second accounting of the same compressor energy.
+
+It looked completely plausible for months. It only broke when it was put next to
+a number that could contradict it: the Powerwall's whole-house load.
+
+**Give every derived number something that can disprove it.** HVAC is a subset of
+the house, so HVAC > house is impossible — that single inequality caught it.
+Physical impossibility is the cheapest test you own, and it needs no datasheet.
+
+### 5. If two dashboards score the same data, they must agree
+
+A Grafana gauge said the security posture was **98%**. This deck said **95%**.
+Same 20 rows, two formulas. Both bugs were here: a 24-hour window that silently
+dropped quiet items out of the *denominator*, and binary scoring that treated
+"mitigated, still watching" as a total failure.
+
+A dashboard that argues with your other dashboard is worse than no dashboard —
+you stop trusting both, including the one that was right.
+
+### 6. `localhost` is not a hostname, it's a perspective
 
 Hardcoding `localhost:3002` worked perfectly in the kiosk and broke the instant the
 dashboard was opened from another machine — where `localhost` is the *viewing* device.

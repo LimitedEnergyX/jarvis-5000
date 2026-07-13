@@ -87,7 +87,25 @@ window.JARVIS_CONFIG = {
     outdoorTempC:   'thermostat_outdoor_temperature',
     indoorHumidity: 'thermostat_indoor_humidity',      // "%" measurement
 
-    hvacPower: ['hvac_indoor_power', 'hvac_outdoor_power'],   // "W", summed
+    // "W", SUMMED. Only list sensors that measure SEPARATE loads.
+    //
+    // ⚠ THE DOUBLE-COUNT TRAP. Some heat-pump integrations expose an
+    // "indoor unit power" that is an ALLOCATION of total system energy, not
+    // the air handler's own draw. Adding it to the outdoor unit counts the
+    // compressor twice. On the author's Daikin this reported 2.11 kW of HVAC
+    // inside a 1.66 kW house — and it looked perfectly plausible until it was
+    // compared against something that could contradict it.
+    //
+    // The test needs no datasheet: HVAC is a SUBSET of the house, so it can
+    // never exceed whole-house load. Chart your hvacPower sum against your
+    // home's total draw for a day. If the sum ever wins, you're double-counting.
+    // Two more tells: a "blower" that reads 0 while the compressor pulls 1 kW
+    // (you cannot move heat without moving air), and a "blower" drawing over
+    // 1 kW (a real one is 300-500 W ducted, 20-40 W on a mini-split).
+    //
+    // Start with the OUTDOOR unit alone. It is the compressor and it is most of
+    // the load. Prefer understating over a number that is confidently wrong.
+    hvacPower: ['hvac_outdoor_power'],
 
     // Air quality.
     // ⚠ These two often use OPPOSITE scales. An indoor air-quality monitor
@@ -175,6 +193,13 @@ window.JARVIS_CONFIG = {
   //   remediation : one row per hardening item, string field `status`
   //                 ("resolved" / "monitoring" / ...), tag `item`
   //   ai_triage   : string field `verdict`
+  //
+  // SCORING: looks back 90d, takes the last status per item, and scores
+  // resolved=100, monitoring=50, else 0. If you ALSO score this data somewhere
+  // else (a Grafana gauge, say), make the two formulas identical. A dashboard
+  // that argues with your other dashboard is worse than no dashboard — you stop
+  // trusting both. The 90d window matters: a short window silently drops quiet
+  // items out of the DENOMINATOR, so the score changes meaning by the hour.
   sysmon: {
     enabled: true,
     remediationMeasurement: 'remediation',
